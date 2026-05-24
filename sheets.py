@@ -61,6 +61,30 @@ def _get_sheet(spreadsheet_id: str):
     return sheet
 
 
+def get_all_rows(spreadsheet_id: str) -> list:
+    """Retorna todas as linhas como lista de dicts com _row_index."""
+    try:
+        sheet = _get_sheet(spreadsheet_id)
+        records = sheet.get_all_records()
+        for i, row in enumerate(records):
+            row["_row_index"] = i + 2  # +1 cabeçalho, +1 base 1
+        return records
+    except Exception as e:
+        st.error(f"Erro ao carregar planilha: {e}")
+        return []
+
+
+def update_status(spreadsheet_id: str, row_index: int, status: str) -> bool:
+    """Atualiza a coluna Status (G=7) de uma linha específica."""
+    try:
+        sheet = _get_sheet(spreadsheet_id)
+        sheet.update_cell(row_index, 7, status)
+        return True
+    except Exception as e:
+        st.error(f"Erro ao atualizar status: {e}")
+        return False
+
+
 def append_row(spreadsheet_id: str, data: dict) -> bool:
     """Adiciona uma linha na planilha. Retorna True se sucesso."""
     try:

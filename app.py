@@ -5,7 +5,7 @@ import io
 import fitz  # PyMuPDF
 
 from extractor import extract_boleto, extract_boleto_pdf, extract_cheque, TESSERACT_OK, PYZBAR_OK
-from sheets import append_row
+from sheets import append_row, get_all_rows, update_status
 
 
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
@@ -84,6 +84,11 @@ def tela_inicio():
             st.session_state.tipo = "Cheque"
             st.session_state.tela = "captura"
             st.rerun()
+
+    st.markdown("")
+    if st.button("📋 Ver pendentes", use_container_width=True):
+        st.session_state.tela = "pendentes"
+        st.rerun()
 
     # Aviso de dependências ausentes
     avisos = []
@@ -216,6 +221,85 @@ def tela_confirmacao():
         st.rerun()
 
 
+def tela_pendentes():
+    from datetime import datetime
+
+    st.title("📋 Pendentes")
+
+    if not SPREADSHEET_ID:
+        st.error("ID da planilha não configurado.")
+        return
+
+    with st.spinner("Carregando..."):
+        rows = get_all_rows(SPREADSHEET_ID)
+
+    pendentes = [r for r in rows if r.get("Status", "").strip() in ("Pendente", "")]
+
+    if not pendentes:
+        st.success("Nenhum boleto ou cheque pendente!")
+        st.markdown("")
+        if st.button("← Voltar"):
+            st.session_state.tela = "inicio"
+            st.rerun()
+        return
+
+    st.caption(f"{len(pendentes)} item(ns) pendente(s)")
+    st.markdown("")
+
+    for row in pendentes:
+        beneficiario = row.get("Beneficiário", "") or "Sem nome"
+        valor = row.get("Valor (R$)", "") or "—"
+        vencimento = row.get("Vencimento", "") or "—"
+        tipo = row.get("Tipo", "")
+        row_idx = row["_row_index"]
+
+        # Define cor do card com base no vencimento
+        cor = "#FFF8E1"  # amarelo claro padrão
+        emoji_prazo = "🟡"
+        try:
+            venc_date = datetime.strptime(vencimento, "%d/%m/%Y").date()
+            hoje = date.today()
+            dias = (venc_date - hoje).days
+            if dias < 0:
+                cor = "#FFEBEE"   # vermelho — vencido
+                emoji_prazo = "🔴"
+            elif dias <= 3:
+                cor = "#FFF3E0"   # laranja — vence em breve
+                emoji_prazo = "🟠"
+            else:
+                cor = "#E8F5E9"   # verde — ok
+                emoji_prazo = "🟢"
+        except Exception:
+            dias = None
+
+
+        st.markdown(
+            f"""<div style="background:{cor};padding:12px 16px;border-radius:10px;margin-bottom:10px">
+            <b>{emoji_prazo} {beneficiario}</b><br>
+            <span style="font-size:0.85rem">{tipo} · R$ {valor} · Vence: {vencimento}</span>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button("✅ Marcar como Pago", key=f"pago_{row_idx}", use_container_width=True):
+                with st.spinner("Atualizando..."):
+                    update_status(SPREADSHEET_ID, row_idx, "Pago")
+                st.success(f"{beneficiario} marcado como pago!")
+                st.rerun()
+        with col2:
+            if st.button("❌ Cancelar/Ignorar", key=f"cancelar_{row_idx}", use_container_width=True):
+                with st.spinner("Atualizando..."):
+                    update_status(SPREADSHEET_ID, row_idx, "Cancelado")
+                st.rerun()
+
+    st.markdown("")
+    if st.button("← Voltar"):
+        st.session_state.tela = "inicio"
+        st.rerun()
+
+
 # --- Roteador principal ---
 
 init_state()
@@ -225,6 +309,7 @@ telas = {
     "captura": tela_captura,
     "revisao": tela_revisao,
     "confirmacao": tela_confirmacao,
+    "pendentes": tela_pendentes,
 }
 
 telas[st.session_state.tela]()
