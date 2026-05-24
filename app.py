@@ -1,22 +1,24 @@
 import streamlit as st
 from PIL import Image
+from datetime import date
 import io
 
 import fitz  # PyMuPDF
 
 from extractor import extract_boleto, extract_boleto_pdf, extract_cheque, TESSERACT_OK, PYZBAR_OK
-from sheets import append_row, get_all_rows, update_status
+from sheets import append_row, get_all_rows, update_status, ENTIDADES, BANCOS
 
 
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
     """Converte a primeira página de um PDF em imagem PIL."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     page = doc[0]
-    mat = fitz.Matrix(2.0, 2.0)  # 2x zoom para melhor qualidade
+    mat = fitz.Matrix(2.0, 2.0)
     pix = page.get_pixmap(matrix=mat)
     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
     doc.close()
     return img
+
 
 st.set_page_config(
     page_title="Boletos & Cheques",
@@ -25,17 +27,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ID da planilha Google Sheets — preencher após criar a planilha
-SPREADSHEET_ID = st.secrets.get("spreadsheet_id", "") if hasattr(st, "secrets") else ""
+# ID da planilha
+try:
+    SPREADSHEET_ID = st.secrets["spreadsheet_id"]
+except Exception:
+    SPREADSHEET_ID = ""
 
-# Tenta ler do secrets ou pede ao usuário
-if not SPREADSHEET_ID:
-    try:
-        SPREADSHEET_ID = st.secrets["spreadsheet_id"]
-    except Exception:
-        SPREADSHEET_ID = ""
-
-# CSS para melhorar aparência no celular
+# CSS mobile-friendly
 st.markdown("""
 <style>
     .block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
@@ -46,12 +44,6 @@ st.markdown("""
         font-size: 1.1rem;
         border-radius: 8px;
     }
-    .status-box {
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 0.5rem 0;
-        font-size: 0.9rem;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -60,6 +52,8 @@ def init_state():
     defaults = {
         "tela": "inicio",
         "tipo": None,
+        "entidade": ENTIDADES[0],
+        "banco": BANCOS[0],
         "dados": {},
         "imagem": None,
     }
@@ -67,6 +61,8 @@ def init_state():
         if k not in st.session_state:
             st.session_state[k] = v
 
+
+# ── Tela 1: Início ────────────────────────────────────────────────────────────
 
 def tela_inicio():
     st.title("📄 Boletos & Cheques")
@@ -77,12 +73,12 @@ def tela_inicio():
     with col1:
         if st.button("🧾 Boleto", use_container_width=True):
             st.session_state.tipo = "Boleto"
-            st.session_state.tela = "captura"
+            st.session_state.tela = "conta"
             st.rerun()
     with col2:
         if st.button("📝 Cheque", use_container_width=True):
             st.session_state.tipo = "Cheque"
-            st.session_state.tela = "captura"
+            st.session_state.tela = "conta"
             st.rerun()
 
     st.markdown("")
@@ -90,21 +86,60 @@ def tela_inicio():
         st.session_state.tela = "pendentes"
         st.rerun()
 
-    # Aviso de dependências ausentes
     avisos = []
     if not PYZBAR_OK:
         avisos.append("⚠️ pyzbar não instalado — leitura de código de barras desativada.")
     if not TESSERACT_OK:
-        avisos.append("⚠️ Tesseract não instalado — OCR de texto desativado.")
+        avisos.append("⚠️ Tesseract não instalado — OCR desativado.")
     if avisos:
         with st.expander("Avisos de configuração"):
             for a in avisos:
                 st.warning(a)
 
 
-def tela_captura():
+# ── Tela 2: Seleção de Conta ──────────────────────────────────────────────────
+
+def tela_conta():
     tipo = st.session_state.tipo
     st.title(f"{'🧾' if tipo == 'Boleto' else '📝'} {tipo}")
+    st.markdown("**Para qual conta é esse documento?**")
+    st.markdown("")
+
+    entidade = st.selectbox(
+        "Empresa / Titular",
+        ENTIDADES,
+        index=ENTIDADES.index(st.session_state.entidade) if st.session_state.entidade in ENTIDADES else 0,
+    )
+    banco = st.selectbox(
+        "Banco",
+        BANCOS,
+        index=BANCOS.index(st.session_state.banco) if st.session_state.banco in BANCOS else 0,
+    )
+
+    tab_name = f"{entidade} - {banco}"
+    st.caption(f"Será salvo na aba: **{tab_name}**")
+
+    st.markdown("")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("← Voltar", use_container_width=True):
+            st.session_state.tela = "inicio"
+            st.rerun()
+    with col2:
+        if st.button("Continuar →", type="primary", use_container_width=True):
+            st.session_state.entidade = entidade
+            st.session_state.banco = banco
+            st.session_state.tela = "captura"
+            st.rerun()
+
+
+# ── Tela 3: Captura ───────────────────────────────────────────────────────────
+
+def tela_captura():
+    tipo = st.session_state.tipo
+    tab_name = f"{st.session_state.entidade} - {st.session_state.banco}"
+    st.title(f"{'🧾' if tipo == 'Boleto' else '📝'} {tipo}")
+    st.caption(f"Conta: **{tab_name}**")
     st.markdown(f"Tire uma foto ou envie uma imagem do **{tipo.lower()}**.")
 
     tab_cam, tab_upload = st.tabs(["📷 Câmera", "🖼️ Galeria"])
@@ -120,7 +155,6 @@ def tela_captura():
         if arquivo:
             dados = arquivo.read()
             if arquivo.name.lower().endswith(".pdf"):
-                # PDF digital: extrai texto direto (muito mais preciso que OCR)
                 if tipo == "Boleto":
                     with st.spinner("Lendo PDF..."):
                         extracted = extract_boleto_pdf(dados)
@@ -146,19 +180,30 @@ def tela_captura():
 
     st.markdown("")
     if st.button("← Voltar"):
-        st.session_state.tela = "inicio"
+        st.session_state.tela = "conta"
         st.rerun()
 
+
+# ── Tela 4: Revisão ───────────────────────────────────────────────────────────
 
 def tela_revisao():
     tipo = st.session_state.tipo
     dados = st.session_state.dados.copy()
     imagem = st.session_state.imagem
+    entidade = st.session_state.entidade
+    banco = st.session_state.banco
+    tab_name = f"{entidade} - {banco}"
 
     st.title("✏️ Confirmar dados")
     st.caption("Verifique e corrija se necessário antes de salvar.")
 
-    # Miniatura da imagem
+    # Badge de conta
+    st.markdown(
+        f'<div style="background:#E3F2FD;padding:8px 14px;border-radius:8px;display:inline-block;margin-bottom:12px">'
+        f'🏦 <b>{tab_name}</b></div>',
+        unsafe_allow_html=True,
+    )
+
     if imagem:
         st.image(imagem, width=300)
 
@@ -172,9 +217,7 @@ def tela_revisao():
 
     st.markdown("")
 
-    # Validação básica antes de salvar
     pode_salvar = bool(valor.strip() or vencimento.strip())
-
     if not pode_salvar:
         st.info("Preencha ao menos o **Valor** ou o **Vencimento** para salvar.")
 
@@ -188,7 +231,7 @@ def tela_revisao():
 
     if salvar_btn:
         if not SPREADSHEET_ID:
-            st.error("ID da planilha não configurado. Consulte o README para configurar.")
+            st.error("ID da planilha não configurado.")
             return
 
         dados_finais = {
@@ -200,8 +243,8 @@ def tela_revisao():
             "observacoes": observacoes,
         }
 
-        with st.spinner("Salvando na planilha..."):
-            sucesso = append_row(SPREADSHEET_ID, dados_finais)
+        with st.spinner(f"Salvando em '{tab_name}'..."):
+            sucesso = append_row(SPREADSHEET_ID, dados_finais, tab_name)
 
         if sucesso:
             st.session_state.tela = "confirmacao"
@@ -210,9 +253,12 @@ def tela_revisao():
             st.rerun()
 
 
+# ── Tela 5: Confirmação ───────────────────────────────────────────────────────
+
 def tela_confirmacao():
+    tab_name = f"{st.session_state.entidade} - {st.session_state.banco}"
     st.title("✅ Salvo!")
-    st.success("Os dados foram adicionados à planilha com sucesso.")
+    st.success(f"Dados salvos na aba **{tab_name}** com sucesso.")
     st.balloons()
 
     st.markdown("")
@@ -221,9 +267,9 @@ def tela_confirmacao():
         st.rerun()
 
 
-def tela_pendentes():
-    from datetime import datetime
+# ── Tela 6: Pendentes ─────────────────────────────────────────────────────────
 
+def tela_pendentes():
     st.title("📋 Pendentes")
 
     if not SPREADSHEET_ID:
@@ -251,47 +297,43 @@ def tela_pendentes():
         valor = row.get("Valor (R$)", "") or "—"
         vencimento = row.get("Vencimento", "") or "—"
         tipo = row.get("Tipo", "")
+        tab_name = row.get("_tab_name", "")
         row_idx = row["_row_index"]
 
-        # Define cor do card com base no vencimento
-        cor = "#FFF8E1"  # amarelo claro padrão
+        cor = "#FFF8E1"
         emoji_prazo = "🟡"
         try:
+            from datetime import datetime
             venc_date = datetime.strptime(vencimento, "%d/%m/%Y").date()
-            hoje = date.today()
-            dias = (venc_date - hoje).days
+            dias = (venc_date - date.today()).days
             if dias < 0:
-                cor = "#FFEBEE"   # vermelho — vencido
-                emoji_prazo = "🔴"
+                cor, emoji_prazo = "#FFEBEE", "🔴"
             elif dias <= 3:
-                cor = "#FFF3E0"   # laranja — vence em breve
-                emoji_prazo = "🟠"
+                cor, emoji_prazo = "#FFF3E0", "🟠"
             else:
-                cor = "#E8F5E9"   # verde — ok
-                emoji_prazo = "🟢"
+                cor, emoji_prazo = "#E8F5E9", "🟢"
         except Exception:
-            dias = None
-
+            pass
 
         st.markdown(
-            f"""<div style="background:{cor};padding:12px 16px;border-radius:10px;margin-bottom:10px">
+            f"""<div style="background:{cor};padding:12px 16px;border-radius:10px;margin-bottom:6px">
             <b>{emoji_prazo} {beneficiario}</b><br>
-            <span style="font-size:0.85rem">{tipo} · R$ {valor} · Vence: {vencimento}</span>
+            <span style="font-size:0.85rem">{tipo} · R$ {valor} · Vence: {vencimento}</span><br>
+            <span style="font-size:0.78rem;color:#555">🏦 {tab_name}</span>
             </div>""",
             unsafe_allow_html=True,
         )
 
-        col1, col2 = st.columns([1, 1])
+        col1, col2 = st.columns(2)
         with col1:
-            if st.button("✅ Marcar como Pago", key=f"pago_{row_idx}", use_container_width=True):
+            if st.button("✅ Pago", key=f"pago_{tab_name}_{row_idx}", use_container_width=True):
                 with st.spinner("Atualizando..."):
-                    update_status(SPREADSHEET_ID, row_idx, "Pago")
-                st.success(f"{beneficiario} marcado como pago!")
+                    update_status(SPREADSHEET_ID, tab_name, row_idx, "Pago")
                 st.rerun()
         with col2:
-            if st.button("❌ Cancelar/Ignorar", key=f"cancelar_{row_idx}", use_container_width=True):
+            if st.button("❌ Cancelar", key=f"cancel_{tab_name}_{row_idx}", use_container_width=True):
                 with st.spinner("Atualizando..."):
-                    update_status(SPREADSHEET_ID, row_idx, "Cancelado")
+                    update_status(SPREADSHEET_ID, tab_name, row_idx, "Cancelado")
                 st.rerun()
 
     st.markdown("")
@@ -300,12 +342,13 @@ def tela_pendentes():
         st.rerun()
 
 
-# --- Roteador principal ---
+# ── Roteador ──────────────────────────────────────────────────────────────────
 
 init_state()
 
 telas = {
     "inicio": tela_inicio,
+    "conta": tela_conta,
     "captura": tela_captura,
     "revisao": tela_revisao,
     "confirmacao": tela_confirmacao,
