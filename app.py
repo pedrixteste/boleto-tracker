@@ -155,29 +155,78 @@ def tela_captura():
     imagem = None
 
     with aba_scanner:
-        if not SCANNER_OK:
-            st.warning("Scanner não disponível. Use a aba PDF/Foto.")
-        else:
-            st.caption("Aponte a câmera para o **QR code** ou **código de barras** do boleto.")
-            raw = qrcode_scanner(key=f"scanner_{tipo}")
-            if raw:
-                result = {"tipo": tipo, "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
-                if raw.startswith("000201"):
-                    result.update(_parse_pix_emv(raw))
-                    result["codigo"] = raw[:60] + "..." if len(raw) > 60 else raw
-                else:
-                    digits = re.sub(r"\D", "", raw)
-                    if len(digits) >= 44:
-                        parsed = _parse_boleto_44(digits[:44])
-                        if parsed:
-                            result.update(parsed)
-                            result["codigo"] = digits[:44]
-                if not result.get("valor"):
-                    result.update(_extrair_dados_texto(raw))
+        st.caption("Aponte a câmera para o **QR code PIX** ou **código de barras** do boleto.")
+
+        # Scanner ZXing — suporta QR Code, ITF (código de barras de boleto), Code128, etc.
+        scanner_html = """
+        <div id="scanner-box" style="width:100%;max-width:400px;margin:0 auto">
+          <video id="video" style="width:100%;border-radius:8px" autoplay playsinline></video>
+          <p id="status" style="text-align:center;font-size:14px;margin-top:8px;color:#555">Iniciando câmera...</p>
+        </div>
+        <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
+        <script>
+        const hints = new Map();
+        const formats = [
+          ZXing.BarcodeFormat.QR_CODE,
+          ZXing.BarcodeFormat.ITF,
+          ZXing.BarcodeFormat.CODE_128,
+          ZXing.BarcodeFormat.EAN_13,
+        ];
+        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+        hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+
+        const reader = new ZXing.BrowserMultiFormatReader(hints);
+        const video = document.getElementById('video');
+        const status = document.getElementById('status');
+
+        reader.decodeFromConstraints(
+          { video: { facingMode: 'environment' } },
+          video,
+          (result, err) => {
+            if (result) {
+              status.textContent = '✅ Lido! Processando...';
+              status.style.color = '#2e7d32';
+              reader.reset();
+              // Envia para o Streamlit via query param
+              const encoded = encodeURIComponent(result.getText());
+              window.parent.location.href = window.parent.location.href.split('?')[0] + '?scan=' + encoded;
+            } else {
+              status.textContent = 'Aponte para o QR code ou código de barras...';
+            }
+          }
+        );
+        </script>
+        """
+        st.components.v1.html(scanner_html, height=320)
+
+        # Lê resultado do scanner via query param
+        scan_result = st.query_params.get("scan", "")
+        if scan_result:
+            st.query_params.clear()
+            raw = scan_result.strip()
+            result = {"tipo": tipo, "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
+
+            if raw.startswith("http://") or raw.startswith("https://"):
+                st.warning("⚠️ Este QR code é um link da nota fiscal, não contém dados de pagamento. Use a aba **Linha digitável** ou **Digitar**.")
+            elif raw.startswith("000201"):
+                result.update(_parse_pix_emv(raw))
+                result["codigo"] = raw[:60] + "..." if len(raw) > 60 else raw
                 st.session_state.dados = result
                 st.session_state.imagem = None
                 st.session_state.tela = "revisao"
                 st.rerun()
+            else:
+                digits = re.sub(r"\D", "", raw)
+                if len(digits) >= 44:
+                    parsed = _parse_boleto_44(digits[:44])
+                    if parsed:
+                        result.update(parsed)
+                        result["codigo"] = digits[:44]
+                        st.session_state.dados = result
+                        st.session_state.imagem = None
+                        st.session_state.tela = "revisao"
+                        st.rerun()
+                st.warning("⚠️ Código lido mas não reconhecido. Use a aba **Linha digitável**.")
 
     with aba_foto:
         st.caption("Melhor para PDFs digitais. Fotos físicas podem ter qualidade reduzida pelo celular.")
