@@ -195,7 +195,15 @@ def tela_revisao():
     tab_name = f"{entidade} - {banco}"
 
     st.title("✏️ Confirmar dados")
-    st.caption("Verifique e corrija se necessário antes de salvar.")
+
+    # Aviso se poucos campos foram preenchidos automaticamente
+    campos_preenchidos = sum(1 for k in ["beneficiario", "valor", "vencimento"] if dados.get(k, "").strip())
+    if campos_preenchidos == 0:
+        st.warning("⚠️ Não foi possível ler os dados automaticamente. Preencha os campos abaixo.")
+    elif campos_preenchidos < 2:
+        st.info("ℹ️ Alguns dados não foram lidos. Confira e complete antes de salvar.")
+    else:
+        st.caption("Verifique e corrija se necessário antes de salvar.")
 
     # Badge de conta
     st.markdown(

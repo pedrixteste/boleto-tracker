@@ -210,46 +210,88 @@ def _parse_boleto_44(code: str) -> dict:
     return {"valor": valor, "vencimento": vencimento, "codigo": code}
 
 
-def extract_boleto(pil_img: Image.Image) -> dict:
-    """Extrai dados de boleto: QR PIX > código de barras > OCR."""
-    result = {"tipo": "Boleto", "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
+def _tentar_qr(pil_img: Image.Image) -> str:
+    """Tenta ler QR code com múltiplos pré-processamentos."""
+    if not PYZBAR_OK:
+        return ""
 
-    if PYZBAR_OK:
-        codes = pyzbar_decode(pil_img)
+    tentativas = [pil_img]
+
+    # Versões processadas para tentar
+    if CV2_OK:
+        img_np = np.array(pil_img.convert("RGB"))
+        gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+
+        # 1. Threshold simples (ótimo para QR)
+        _, thresh1 = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY)
+        tentativas.append(Image.fromarray(thresh1))
+
+        # 2. Upscale 2x + threshold
+        h, w = gray.shape
+        big = cv2.resize(gray, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+        _, thresh2 = cv2.threshold(big, 128, 255, cv2.THRESH_BINARY)
+        tentativas.append(Image.fromarray(thresh2))
+
+        # 3. Aumenta contraste antes do threshold
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        _, thresh3 = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        tentativas.append(Image.fromarray(thresh3))
+
+    for img in tentativas:
+        codes = pyzbar_decode(img)
         for c in codes:
             raw = c.data.decode("utf-8", errors="ignore").strip()
+            if raw:
+                return raw
+    return ""
 
-            # QR Code PIX (EMV)
-            if raw.startswith("000201"):
-                parsed = _parse_pix_emv(raw)
-                if parsed.get("valor"):
-                    result.update(parsed)
-                    result["codigo"] = raw[:60] + "..." if len(raw) > 60 else raw
-                    # Ainda tenta pegar vencimento via OCR se não veio do PIX
-                    if not result.get("vencimento") and TESSERACT_OK:
-                        text = _ocr_text(pil_img)
-                        m = re.search(r"Vencimento[\s\n:]+(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE)
-                        if not m:
-                            dates = re.findall(r"\b(\d{2}/\d{2}/20[2-9]\d)\b", text)
-                            if dates:
-                                result["vencimento"] = dates[0]
-                        else:
-                            result["vencimento"] = m.group(1)
-                    return result
 
-            # Código de barras tradicional (44 dígitos)
-            digits_only = re.sub(r"\D", "", raw)
-            if len(digits_only) >= 44:
-                parsed = _parse_boleto_44(digits_only[:44])
-                if parsed:
-                    result.update(parsed)
-                    result["codigo"] = digits_only[:44]
-                    return result
+def extract_boleto(pil_img: Image.Image) -> dict:
+    """Extrai dados de boleto: QR PIX > código de barras > OCR (fallback vazio)."""
+    result = {"tipo": "Boleto", "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
 
-    # Fallback: OCR
+    # 1. Tenta QR code com múltiplos preprocessamentos
+    raw = _tentar_qr(pil_img)
+    if raw:
+        # QR Code PIX (EMV)
+        if raw.startswith("000201"):
+            parsed = _parse_pix_emv(raw)
+            if parsed.get("valor"):
+                result.update(parsed)
+                result["codigo"] = raw[:60] + "..." if len(raw) > 60 else raw
+                # Tenta pegar vencimento via OCR (não vem no PIX)
+                if TESSERACT_OK:
+                    text = _ocr_text(pil_img)
+                    m = re.search(r"Vencimento[\s\n:]+(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE)
+                    if m:
+                        result["vencimento"] = m.group(1)
+                    else:
+                        dates = re.findall(r"\b(\d{2}/\d{2}/20[2-9]\d)\b", text)
+                        if dates:
+                            result["vencimento"] = dates[0]
+                return result
+
+        # Código de barras tradicional (44 dígitos)
+        digits_only = re.sub(r"\D", "", raw)
+        if len(digits_only) >= 44:
+            parsed = _parse_boleto_44(digits_only[:44])
+            if parsed:
+                result.update(parsed)
+                result["codigo"] = digits_only[:44]
+                return result
+
+    # 2. Fallback OCR — só usa se conseguir dados razoáveis
     if TESSERACT_OK:
         text = _ocr_text(pil_img)
-        result.update(_extrair_dados_texto(text))
+        dados = _extrair_dados_texto(text)
+        # Valida: só aceita valor se parecer razoável
+        valor = dados.get("valor", "")
+        if valor:
+            digits = re.sub(r"[.,]", "", valor)
+            if len(digits) > 8:  # mais de R$ 999.999 = suspeito
+                dados.pop("valor", None)
+        result.update(dados)
 
     return result
 
