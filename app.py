@@ -142,30 +142,28 @@ def tela_captura():
     st.caption(f"Conta: **{tab_name}**")
     st.markdown(f"Tire uma foto ou envie uma imagem do **{tipo.lower()}**.")
 
-    tab_cam, tab_upload = st.tabs(["📷 Câmera", "🖼️ Galeria"])
+    st.info("📱 No celular: toque em **Procurar arquivos** → **Câmera** para tirar foto, ou escolha da galeria.")
 
     imagem = None
-    with tab_cam:
-        foto = st.camera_input("Tire a foto")
-        if foto:
-            imagem = Image.open(io.BytesIO(foto.getvalue()))
-
-    with tab_upload:
-        arquivo = st.file_uploader("Escolha uma imagem ou PDF", type=["jpg", "jpeg", "png", "pdf"])
-        if arquivo:
-            dados = arquivo.read()
-            if arquivo.name.lower().endswith(".pdf"):
-                if tipo == "Boleto":
-                    with st.spinner("Lendo PDF..."):
-                        extracted = extract_boleto_pdf(dados)
-                    st.session_state.dados = extracted
-                    st.session_state.imagem = pdf_to_image(dados)
-                    st.session_state.tela = "revisao"
-                    st.rerun()
-                else:
-                    imagem = pdf_to_image(dados)
+    arquivo = st.file_uploader(
+        "Foto ou PDF do documento",
+        type=["jpg", "jpeg", "png", "pdf"],
+        label_visibility="collapsed",
+    )
+    if arquivo:
+        dados = arquivo.read()
+        if arquivo.name.lower().endswith(".pdf"):
+            if tipo == "Boleto":
+                with st.spinner("Lendo PDF..."):
+                    extracted = extract_boleto_pdf(dados)
+                st.session_state.dados = extracted
+                st.session_state.imagem = pdf_to_image(dados)
+                st.session_state.tela = "revisao"
+                st.rerun()
             else:
-                imagem = Image.open(io.BytesIO(dados))
+                imagem = pdf_to_image(dados)
+        else:
+            imagem = Image.open(io.BytesIO(dados))
 
     if imagem:
         st.session_state.imagem = imagem
