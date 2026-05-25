@@ -2,6 +2,7 @@ import streamlit as st
 from PIL import Image
 from datetime import date
 import io
+import re
 
 import fitz  # PyMuPDF
 
@@ -142,28 +143,63 @@ def tela_captura():
     st.caption(f"Conta: **{tab_name}**")
     st.markdown(f"Tire uma foto ou envie uma imagem do **{tipo.lower()}**.")
 
-    st.info("📱 No celular: toque em **Procurar arquivos** → **Câmera** para tirar foto, ou escolha da galeria.")
+    aba_foto, aba_codigo, aba_manual = st.tabs(["📎 PDF / Foto", "🔢 Linha digitável", "✏️ Digitar"])
 
     imagem = None
-    arquivo = st.file_uploader(
-        "Foto ou PDF do documento",
-        type=["jpg", "jpeg", "png", "pdf"],
-        label_visibility="collapsed",
-    )
-    if arquivo:
-        dados = arquivo.read()
-        if arquivo.name.lower().endswith(".pdf"):
-            if tipo == "Boleto":
-                with st.spinner("Lendo PDF..."):
-                    extracted = extract_boleto_pdf(dados)
-                st.session_state.dados = extracted
-                st.session_state.imagem = pdf_to_image(dados)
+
+    with aba_foto:
+        st.caption("Melhor para PDFs digitais. Fotos físicas podem ter qualidade reduzida pelo celular.")
+        arquivo = st.file_uploader(
+            "Foto ou PDF do documento",
+            type=["jpg", "jpeg", "png", "pdf"],
+            label_visibility="collapsed",
+        )
+        if arquivo:
+            dados = arquivo.read()
+            if arquivo.name.lower().endswith(".pdf"):
+                if tipo == "Boleto":
+                    with st.spinner("Lendo PDF..."):
+                        extracted = extract_boleto_pdf(dados)
+                    st.session_state.dados = extracted
+                    st.session_state.imagem = pdf_to_image(dados)
+                    st.session_state.tela = "revisao"
+                    st.rerun()
+                else:
+                    imagem = pdf_to_image(dados)
+            else:
+                imagem = Image.open(io.BytesIO(dados))
+
+    with aba_codigo:
+        st.caption("Cole a sequência de números do boleto (linha digitável). Extração 100% precisa.")
+        linha = st.text_area("Linha digitável", placeholder="4326 0509 2575 5800 0121...", height=100)
+        if st.button("Processar →", key="btn_linha", use_container_width=True):
+            if linha.strip():
+                from extractor import _parse_boleto_44, _parse_pix_emv, _extrair_dados_texto
+                raw = linha.strip()
+                digits = re.sub(r"\D", "", raw)
+                result = {"tipo": tipo, "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
+                if raw.startswith("000201"):
+                    result.update(_parse_pix_emv(raw))
+                    result["codigo"] = raw[:60]
+                elif len(digits) >= 44:
+                    parsed = _parse_boleto_44(digits[:44])
+                    if parsed:
+                        result.update(parsed)
+                        result["codigo"] = digits[:44]
+                if not result.get("valor"):
+                    result.update(_extrair_dados_texto(raw))
+                st.session_state.dados = result
+                st.session_state.imagem = None
                 st.session_state.tela = "revisao"
                 st.rerun()
-            else:
-                imagem = pdf_to_image(dados)
-        else:
-            imagem = Image.open(io.BytesIO(dados))
+
+    with aba_manual:
+        st.caption("Preencha os dados diretamente sem foto.")
+        if st.button("Ir para o formulário →", key="btn_manual", use_container_width=True):
+            st.session_state.dados = {"tipo": tipo, "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
+            st.session_state.imagem = None
+            st.session_state.tela = "revisao"
+            st.rerun()
 
     if imagem:
         st.session_state.imagem = imagem
