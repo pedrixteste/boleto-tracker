@@ -7,7 +7,14 @@ import re
 import fitz  # PyMuPDF
 
 from extractor import extract_boleto, extract_boleto_pdf, extract_cheque, TESSERACT_OK, PYZBAR_OK
+from extractor import _parse_boleto_44, _parse_pix_emv, _extrair_dados_texto
 from sheets import append_row, get_all_rows, update_status, ENTIDADES, BANCOS
+
+try:
+    from streamlit_qrcode_scanner import qrcode_scanner
+    SCANNER_OK = True
+except ImportError:
+    SCANNER_OK = False
 
 
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
@@ -143,9 +150,34 @@ def tela_captura():
     st.caption(f"Conta: **{tab_name}**")
     st.markdown(f"Tire uma foto ou envie uma imagem do **{tipo.lower()}**.")
 
-    aba_foto, aba_codigo, aba_manual = st.tabs(["📎 PDF / Foto", "🔢 Linha digitável", "✏️ Digitar"])
+    aba_scanner, aba_foto, aba_codigo, aba_manual = st.tabs(["📷 Scanner", "📎 PDF / Foto", "🔢 Linha digitável", "✏️ Digitar"])
 
     imagem = None
+
+    with aba_scanner:
+        if not SCANNER_OK:
+            st.warning("Scanner não disponível. Use a aba PDF/Foto.")
+        else:
+            st.caption("Aponte a câmera para o **QR code** ou **código de barras** do boleto.")
+            raw = qrcode_scanner(key=f"scanner_{tipo}")
+            if raw:
+                result = {"tipo": tipo, "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
+                if raw.startswith("000201"):
+                    result.update(_parse_pix_emv(raw))
+                    result["codigo"] = raw[:60] + "..." if len(raw) > 60 else raw
+                else:
+                    digits = re.sub(r"\D", "", raw)
+                    if len(digits) >= 44:
+                        parsed = _parse_boleto_44(digits[:44])
+                        if parsed:
+                            result.update(parsed)
+                            result["codigo"] = digits[:44]
+                if not result.get("valor"):
+                    result.update(_extrair_dados_texto(raw))
+                st.session_state.dados = result
+                st.session_state.imagem = None
+                st.session_state.tela = "revisao"
+                st.rerun()
 
     with aba_foto:
         st.caption("Melhor para PDFs digitais. Fotos físicas podem ter qualidade reduzida pelo celular.")
@@ -174,7 +206,6 @@ def tela_captura():
         linha = st.text_area("Linha digitável", placeholder="4326 0509 2575 5800 0121...", height=100)
         if st.button("Processar →", key="btn_linha", use_container_width=True):
             if linha.strip():
-                from extractor import _parse_boleto_44, _parse_pix_emv, _extrair_dados_texto
                 raw = linha.strip()
                 digits = re.sub(r"\D", "", raw)
                 result = {"tipo": tipo, "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
