@@ -23,6 +23,12 @@ except ImportError:
     PYZBAR_OK = False
 
 try:
+    import zxingcpp
+    ZXINGCPP_OK = True
+except ImportError:
+    ZXINGCPP_OK = False
+
+try:
     import cv2
     CV2_OK = True
 except ImportError:
@@ -247,12 +253,56 @@ def _tentar_qr(pil_img: Image.Image) -> str:
     return ""
 
 
+def _tentar_zxing(pil_img: Image.Image) -> str:
+    """
+    Tenta ler código de barras / QR com zxingcpp.
+    Muito melhor que pyzbar para fotos comprimidas pelo celular.
+    Suporta: ITF (boleto), QR Code (PIX), Code128, EAN-13.
+    """
+    if not ZXINGCPP_OK:
+        return ""
+
+    tentativas = [pil_img.convert("RGB")]
+
+    # Versão upscalada — ajuda quando o boleto foi fotografado de longe
+    w, h = pil_img.size
+    if max(w, h) < 2500:
+        scale = 2500 / max(w, h)
+        big = pil_img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        tentativas.append(big.convert("RGB"))
+
+    # Versão com contraste adaptativo (CLAHE) — ajuda em fotos escuras
+    if CV2_OK:
+        img_np = np.array(pil_img.convert("RGB"))
+        gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        enhanced_rgb = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2RGB)
+        tentativas.append(Image.fromarray(enhanced_rgb))
+
+    for img in tentativas:
+        try:
+            barcodes = zxingcpp.read_barcodes(img)
+            for barcode in barcodes:
+                if barcode.valid and barcode.text.strip():
+                    return barcode.text.strip()
+        except Exception:
+            pass
+
+    return ""
+
+
 def extract_boleto(pil_img: Image.Image) -> dict:
-    """Extrai dados de boleto: QR PIX > código de barras > OCR (fallback vazio)."""
+    """Extrai dados de boleto: zxingcpp > pyzbar > OCR (fallback vazio)."""
     result = {"tipo": "Boleto", "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
 
-    # 1. Tenta QR code com múltiplos preprocessamentos
-    raw = _tentar_qr(pil_img)
+    # 1. Tenta zxingcpp (melhor para fotos comprimidas: suporta ITF + QR)
+    raw = _tentar_zxing(pil_img)
+
+    # 2. Fallback: pyzbar com múltiplos preprocessamentos
+    if not raw:
+        raw = _tentar_qr(pil_img)
+
     if raw:
         # QR Code PIX (EMV)
         if raw.startswith("000201"):

@@ -10,12 +10,6 @@ from extractor import extract_boleto, extract_boleto_pdf, extract_cheque, TESSER
 from extractor import _parse_boleto_44, _parse_pix_emv, _extrair_dados_texto
 from sheets import append_row, get_all_rows, update_status, ENTIDADES, BANCOS
 
-try:
-    from streamlit_qrcode_scanner import qrcode_scanner
-    SCANNER_OK = True
-except ImportError:
-    SCANNER_OK = False
-
 
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
     """Converte a primeira página de um PDF em imagem PIL."""
@@ -56,14 +50,79 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# ── Processamento do resultado do scanner ─────────────────────────────────────
+
+def _processar_raw(raw: str, tipo: str) -> dict:
+    """Converte string lida pelo ZXing em dict de dados do boleto."""
+    result = {"tipo": tipo, "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
+    if raw.startswith("000201"):          # PIX EMV
+        result.update(_parse_pix_emv(raw))
+        result["codigo"] = raw[:60] + "..." if len(raw) > 60 else raw
+    else:
+        digits = re.sub(r"\D", "", raw)
+        if len(digits) >= 44:
+            parsed = _parse_boleto_44(digits[:44])
+            if parsed:
+                result.update(parsed)
+                result["codigo"] = digits[:44]
+    return result
+
+
 def init_state():
+    """
+    Inicializa o session_state.
+    IMPORTANTE: verifica ?scan= ANTES de tudo, porque o ZXing redireciona
+    a página inteira (session_state zerado) e colocamos o resultado na URL.
+    """
+    scan = st.query_params.get("scan", "")
+    if scan:
+        # Recupera o estado que estava na sessão antes da navegação
+        tipo     = st.query_params.get("stipo", "Boleto")
+        entidade = st.query_params.get("sent",  ENTIDADES[0])
+        banco    = st.query_params.get("sban",  BANCOS[0])
+        raw      = scan.strip()
+        st.query_params.clear()
+
+        # Garante defaults necessários
+        st.session_state.setdefault("dados",  {})
+        st.session_state.setdefault("imagem", None)
+
+        # Restaura conta selecionada
+        st.session_state.tipo     = tipo
+        st.session_state.entidade = entidade if entidade in ENTIDADES else ENTIDADES[0]
+        st.session_state.banco    = banco    if banco    in BANCOS    else BANCOS[0]
+        st.session_state.imagem   = None
+
+        if raw.startswith("http://") or raw.startswith("https://"):
+            # QR code de nota fiscal — não é boleto
+            st.session_state.tela = "captura"
+            st.session_state["_scan_msg"] = (
+                "warning",
+                "⚠️ Este QR code é um link de nota fiscal, não contém dados de pagamento. "
+                "Use a aba **Linha digitável** ou **Digitar**.",
+            )
+        else:
+            result = _processar_raw(raw, tipo)
+            if result.get("valor") or result.get("codigo"):
+                st.session_state.dados = result
+                st.session_state.tela  = "revisao"
+            else:
+                st.session_state.tela = "captura"
+                st.session_state["_scan_msg"] = (
+                    "info",
+                    "ℹ️ Código lido mas não reconhecido como boleto. "
+                    "Tente a aba **Linha digitável** ou **Digitar**.",
+                )
+        return  # ← sai sem sobrescrever o que acabou de definir
+
+    # Inicialização normal (primeira carga ou navegação interna)
     defaults = {
-        "tela": "inicio",
-        "tipo": None,
+        "tela":     "inicio",
+        "tipo":     None,
         "entidade": ENTIDADES[0],
-        "banco": BANCOS[0],
-        "dados": {},
-        "imagem": None,
+        "banco":    BANCOS[0],
+        "dados":    {},
+        "imagem":   None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -136,126 +195,132 @@ def tela_conta():
     with col2:
         if st.button("Continuar →", type="primary", use_container_width=True):
             st.session_state.entidade = entidade
-            st.session_state.banco = banco
-            st.session_state.tela = "captura"
+            st.session_state.banco    = banco
+            st.session_state.tela     = "captura"
             st.rerun()
 
 
 # ── Tela 3: Captura ───────────────────────────────────────────────────────────
 
 def tela_captura():
-    tipo = st.session_state.tipo
-    tab_name = f"{st.session_state.entidade} - {st.session_state.banco}"
+    tipo     = st.session_state.tipo
+    entidade = st.session_state.entidade
+    banco    = st.session_state.banco
+    tab_name = f"{entidade} - {banco}"
+
     st.title(f"{'🧾' if tipo == 'Boleto' else '📝'} {tipo}")
     st.caption(f"Conta: **{tab_name}**")
-    st.markdown(f"Tire uma foto ou envie uma imagem do **{tipo.lower()}**.")
 
-    aba_scanner, aba_foto, aba_codigo, aba_manual = st.tabs(["📷 Scanner", "📎 PDF / Foto", "🔢 Linha digitável", "✏️ Digitar"])
+    aba_scanner, aba_foto, aba_codigo, aba_manual = st.tabs(
+        ["📷 Scanner", "📎 PDF / Foto", "🔢 Linha digitável", "✏️ Digitar"]
+    )
 
     imagem = None
 
+    # ── Aba Scanner ──────────────────────────────────────────────────────────
     with aba_scanner:
+        # Exibe mensagem de resultado anterior (vem de init_state após redirecionamento)
+        if "_scan_msg" in st.session_state:
+            level, msg = st.session_state.pop("_scan_msg")
+            if level == "warning":
+                st.warning(msg)
+            else:
+                st.info(msg)
+
         st.caption("Aponte a câmera para o **QR code PIX** ou **código de barras** do boleto.")
 
-        # Scanner ZXing — suporta QR Code, ITF (código de barras de boleto), Code128, etc.
-        scanner_html = """
-        <div id="scanner-box" style="width:100%;max-width:400px;margin:0 auto">
-          <video id="video" style="width:100%;border-radius:8px" autoplay playsinline></video>
-          <p id="status" style="text-align:center;font-size:14px;margin-top:8px;color:#555">Iniciando câmera...</p>
+        # Scanner ZXing via HTML/JS
+        # Quando lê um código, redireciona para ?scan=CODE&stipo=...&sent=...&sban=...
+        # O Python lê esses parâmetros em init_state() (a sessão é zerada pela navegação).
+        scanner_html = f"""
+        <div id="scanner-box" style="width:100%;max-width:420px;margin:0 auto">
+          <video id="video" style="width:100%;border-radius:8px" autoplay playsinline muted></video>
+          <p id="status" style="text-align:center;font-size:14px;margin-top:8px;color:#666">
+            Iniciando câmera...
+          </p>
         </div>
         <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
         <script>
-        const hints = new Map();
-        const formats = [
-          ZXing.BarcodeFormat.QR_CODE,
-          ZXing.BarcodeFormat.ITF,
-          ZXing.BarcodeFormat.CODE_128,
-          ZXing.BarcodeFormat.EAN_13,
-        ];
-        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
-        hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+        (function() {{
+          const hints = new Map();
+          hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+            ZXing.BarcodeFormat.QR_CODE,
+            ZXing.BarcodeFormat.ITF,
+            ZXing.BarcodeFormat.CODE_128,
+            ZXing.BarcodeFormat.EAN_13,
+          ]);
+          hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
 
-        const reader = new ZXing.BrowserMultiFormatReader(hints);
-        const video = document.getElementById('video');
-        const status = document.getElementById('status');
+          const reader = new ZXing.BrowserMultiFormatReader(hints);
+          const video  = document.getElementById('video');
+          const status = document.getElementById('status');
 
-        reader.decodeFromConstraints(
-          { video: { facingMode: 'environment' } },
-          video,
-          (result, err) => {
-            if (result) {
-              status.textContent = '✅ Lido! Processando...';
+          reader.decodeFromConstraints(
+            {{ video: {{ facingMode: 'environment', width: {{ ideal: 1280 }}, height: {{ ideal: 720 }} }} }},
+            video,
+            (result, err) => {{
+              if (!result) return;
+              status.textContent = '✅ Lido! Redirecionando...';
               status.style.color = '#2e7d32';
               reader.reset();
-              // Envia para o Streamlit via query param
+
               const encoded = encodeURIComponent(result.getText());
-              window.parent.location.href = window.parent.location.href.split('?')[0] + '?scan=' + encoded;
-            } else {
-              status.textContent = 'Aponte para o QR code ou código de barras...';
-            }
-          }
-        );
+              const base    = window.parent.location.href.split('?')[0];
+              const url     = base
+                + '?scan='  + encoded
+                + '&stipo=' + encodeURIComponent('{tipo}')
+                + '&sent='  + encodeURIComponent('{entidade}')
+                + '&sban='  + encodeURIComponent('{banco}');
+              try {{
+                window.parent.location.href = url;
+              }} catch(e) {{
+                // Fallback: tenta via window.top
+                try {{ window.top.location.href = url; }}
+                catch(e2) {{
+                  // Último recurso: exibe o código para a usuária copiar
+                  status.innerHTML =
+                    '📋 Cole na aba <b>Linha digitável</b>:<br>'
+                    + '<code style="font-size:12px;word-break:break-all">'
+                    + result.getText() + '</code>';
+                }}
+              }}
+            }}
+          );
+        }})();
         </script>
         """
-        st.components.v1.html(scanner_html, height=320)
+        st.components.v1.html(scanner_html, height=360)
 
-        # Lê resultado do scanner via query param
-        scan_result = st.query_params.get("scan", "")
-        if scan_result:
-            st.query_params.clear()
-            raw = scan_result.strip()
-            result = {"tipo": tipo, "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
-
-            if raw.startswith("http://") or raw.startswith("https://"):
-                st.warning("⚠️ Este QR code é um link da nota fiscal, não contém dados de pagamento. Use a aba **Linha digitável** ou **Digitar**.")
-            elif raw.startswith("000201"):
-                result.update(_parse_pix_emv(raw))
-                result["codigo"] = raw[:60] + "..." if len(raw) > 60 else raw
-                st.session_state.dados = result
-                st.session_state.imagem = None
-                st.session_state.tela = "revisao"
-                st.rerun()
-            else:
-                digits = re.sub(r"\D", "", raw)
-                if len(digits) >= 44:
-                    parsed = _parse_boleto_44(digits[:44])
-                    if parsed:
-                        result.update(parsed)
-                        result["codigo"] = digits[:44]
-                        st.session_state.dados = result
-                        st.session_state.imagem = None
-                        st.session_state.tela = "revisao"
-                        st.rerun()
-                st.warning("⚠️ Código lido mas não reconhecido. Use a aba **Linha digitável**.")
-
+    # ── Aba Foto / PDF ───────────────────────────────────────────────────────
     with aba_foto:
-        st.caption("Melhor para PDFs digitais. Fotos físicas podem ter qualidade reduzida pelo celular.")
+        st.caption("**PDFs funcionam perfeitamente.** Para fotos físicas, segure o celular firme e bem iluminado.")
         arquivo = st.file_uploader(
             "Foto ou PDF do documento",
             type=["jpg", "jpeg", "png", "pdf"],
             label_visibility="collapsed",
         )
         if arquivo:
-            dados = arquivo.read()
+            dados_arq = arquivo.read()
             if arquivo.name.lower().endswith(".pdf"):
                 if tipo == "Boleto":
                     with st.spinner("Lendo PDF..."):
-                        extracted = extract_boleto_pdf(dados)
-                    st.session_state.dados = extracted
-                    st.session_state.imagem = pdf_to_image(dados)
-                    st.session_state.tela = "revisao"
+                        extracted = extract_boleto_pdf(dados_arq)
+                    st.session_state.dados  = extracted
+                    st.session_state.imagem = pdf_to_image(dados_arq)
+                    st.session_state.tela   = "revisao"
                     st.rerun()
                 else:
-                    imagem = pdf_to_image(dados)
+                    imagem = pdf_to_image(dados_arq)
             else:
-                imagem = Image.open(io.BytesIO(dados))
+                imagem = Image.open(io.BytesIO(dados_arq))
 
+    # ── Aba Linha Digitável ──────────────────────────────────────────────────
     with aba_codigo:
-        st.caption("Cole a sequência de números do boleto (linha digitável). Extração 100% precisa.")
+        st.caption("Cole a sequência de números do boleto. Extração 100% precisa — a opção mais confiável.")
         linha = st.text_area("Linha digitável", placeholder="4326 0509 2575 5800 0121...", height=100)
         if st.button("Processar →", key="btn_linha", use_container_width=True):
             if linha.strip():
-                raw = linha.strip()
+                raw    = linha.strip()
                 digits = re.sub(r"\D", "", raw)
                 result = {"tipo": tipo, "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
                 if raw.startswith("000201"):
@@ -268,27 +333,39 @@ def tela_captura():
                         result["codigo"] = digits[:44]
                 if not result.get("valor"):
                     result.update(_extrair_dados_texto(raw))
-                st.session_state.dados = result
+                st.session_state.dados  = result
                 st.session_state.imagem = None
-                st.session_state.tela = "revisao"
+                st.session_state.tela   = "revisao"
                 st.rerun()
 
+    # ── Aba Manual ───────────────────────────────────────────────────────────
     with aba_manual:
         st.caption("Preencha os dados diretamente sem foto.")
         if st.button("Ir para o formulário →", key="btn_manual", use_container_width=True):
-            st.session_state.dados = {"tipo": tipo, "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
+            st.session_state.dados  = {"tipo": tipo, "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
             st.session_state.imagem = None
-            st.session_state.tela = "revisao"
+            st.session_state.tela   = "revisao"
             st.rerun()
 
+    # Processa imagem carregada (foto ou PDF→imagem)
     if imagem:
         st.session_state.imagem = imagem
-        with st.spinner("Lendo imagem..."):
+        with st.spinner("Lendo imagem... (pode demorar alguns segundos)"):
             if tipo == "Boleto":
                 dados = extract_boleto(imagem)
             else:
                 dados = extract_cheque(imagem)
         st.session_state.dados = dados
+
+        # Feedback rápido antes de ir para revisão
+        achou = bool(dados.get("valor") or dados.get("codigo"))
+        if not achou:
+            st.session_state["_scan_msg"] = (
+                "warning",
+                "⚠️ Não foi possível ler o código da imagem. "
+                "Preencha os dados manualmente ou tente a aba **Linha digitável**.",
+            )
+
         st.session_state.tela = "revisao"
         st.rerun()
 
@@ -301,16 +378,23 @@ def tela_captura():
 # ── Tela 4: Revisão ───────────────────────────────────────────────────────────
 
 def tela_revisao():
-    tipo = st.session_state.tipo
-    dados = st.session_state.dados.copy()
-    imagem = st.session_state.imagem
+    tipo     = st.session_state.tipo
+    dados    = st.session_state.dados.copy()
+    imagem   = st.session_state.imagem
     entidade = st.session_state.entidade
-    banco = st.session_state.banco
+    banco    = st.session_state.banco
     tab_name = f"{entidade} - {banco}"
 
     st.title("✏️ Confirmar dados")
 
-    # Aviso se poucos campos foram preenchidos automaticamente
+    # Mensagem vinda do processamento de imagem
+    if "_scan_msg" in st.session_state:
+        level, msg = st.session_state.pop("_scan_msg")
+        if level == "warning":
+            st.warning(msg)
+        else:
+            st.info(msg)
+
     campos_preenchidos = sum(1 for k in ["beneficiario", "valor", "vencimento"] if dados.get(k, "").strip())
     if campos_preenchidos == 0:
         st.warning("⚠️ Não foi possível ler os dados automaticamente. Preencha os campos abaixo.")
@@ -331,11 +415,11 @@ def tela_revisao():
 
     st.markdown("---")
 
-    beneficiario = st.text_input("Beneficiário / Empresa", value=dados.get("beneficiario", ""))
-    valor = st.text_input("Valor (R$)", value=dados.get("valor", ""), placeholder="Ex: 189,90")
-    vencimento = st.text_input("Vencimento (DD/MM/AAAA)", value=dados.get("vencimento", ""), placeholder="Ex: 30/05/2026")
-    codigo = st.text_input("Código / Número", value=dados.get("codigo", ""))
-    observacoes = st.text_area("Observações (opcional)", value=dados.get("observacoes", ""), height=80)
+    beneficiario = st.text_input("Beneficiário / Empresa",       value=dados.get("beneficiario", ""))
+    valor        = st.text_input("Valor (R$)",                   value=dados.get("valor", ""),       placeholder="Ex: 189,90")
+    vencimento   = st.text_input("Vencimento (DD/MM/AAAA)",      value=dados.get("vencimento", ""),  placeholder="Ex: 30/05/2026")
+    codigo       = st.text_input("Código / Número",              value=dados.get("codigo", ""))
+    observacoes  = st.text_area("Observações (opcional)",        value=dados.get("observacoes", ""), height=80)
 
     st.markdown("")
 
@@ -357,11 +441,11 @@ def tela_revisao():
             return
 
         dados_finais = {
-            "tipo": tipo,
+            "tipo":        tipo,
             "beneficiario": beneficiario,
-            "valor": valor,
-            "vencimento": vencimento,
-            "codigo": codigo,
+            "valor":       valor,
+            "vencimento":  vencimento,
+            "codigo":      codigo,
             "observacoes": observacoes,
         }
 
@@ -369,8 +453,8 @@ def tela_revisao():
             sucesso = append_row(SPREADSHEET_ID, dados_finais, tab_name)
 
         if sucesso:
-            st.session_state.tela = "confirmacao"
-            st.session_state.dados = {}
+            st.session_state.tela   = "confirmacao"
+            st.session_state.dados  = {}
             st.session_state.imagem = None
             st.rerun()
 
@@ -416,13 +500,13 @@ def tela_pendentes():
 
     for row in pendentes:
         beneficiario = row.get("Beneficiário", "") or "Sem nome"
-        valor = row.get("Valor (R$)", "") or "—"
-        vencimento = row.get("Vencimento", "") or "—"
-        tipo = row.get("Tipo", "")
-        tab_name = row.get("_tab_name", "")
-        row_idx = row["_row_index"]
+        valor        = row.get("Valor (R$)", "")   or "—"
+        vencimento   = row.get("Vencimento", "")   or "—"
+        tipo         = row.get("Tipo", "")
+        tab_name     = row.get("_tab_name", "")
+        row_idx      = row["_row_index"]
 
-        cor = "#FFF8E1"
+        cor         = "#FFF8E1"
         emoji_prazo = "🟡"
         try:
             from datetime import datetime
@@ -469,12 +553,12 @@ def tela_pendentes():
 init_state()
 
 telas = {
-    "inicio": tela_inicio,
-    "conta": tela_conta,
-    "captura": tela_captura,
-    "revisao": tela_revisao,
-    "confirmacao": tela_confirmacao,
-    "pendentes": tela_pendentes,
+    "inicio":       tela_inicio,
+    "conta":        tela_conta,
+    "captura":      tela_captura,
+    "revisao":      tela_revisao,
+    "confirmacao":  tela_confirmacao,
+    "pendentes":    tela_pendentes,
 }
 
 telas[st.session_state.tela]()
