@@ -8,7 +8,11 @@ import fitz  # PyMuPDF
 
 from extractor import extract_boleto, extract_boleto_pdf, extract_cheque, TESSERACT_OK, PYZBAR_OK
 from extractor import _parse_boleto_44, _parse_pix_emv, _extrair_dados_texto
-from sheets import append_row, get_all_rows, update_status, ENTIDADES, BANCOS
+import random
+import string
+import requests as _requests
+
+from sheets import append_row, get_all_rows, update_status, get_config, save_config, ENTIDADES, BANCOS
 
 
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
@@ -151,6 +155,11 @@ def tela_inicio():
     st.markdown("")
     if st.button("📋 Ver pendentes", use_container_width=True):
         st.session_state.tela = "pendentes"
+        st.rerun()
+
+    st.markdown("")
+    if st.button("🔔 Configurar alertas", use_container_width=True):
+        st.session_state.tela = "config"
         st.rerun()
 
     avisos = []
@@ -548,6 +557,175 @@ def tela_pendentes():
         st.rerun()
 
 
+# ── Tela 7: Configuração de Alertas ──────────────────────────────────────────
+
+def tela_config():
+    import re as _re
+
+    st.title("🔔 Configurar Alertas")
+    st.markdown(
+        "Receba uma notificação no celular todo dia nos horários que você escolher, "
+        "para cada boleto ainda não pago — vencido ou não."
+    )
+    st.markdown("")
+
+    # Carrega config salva
+    config = {}
+    if SPREADSHEET_ID:
+        with st.spinner("Carregando configurações..."):
+            config = get_config(SPREADSHEET_ID)
+
+    # ── Passo 1: instalar ntfy ────────────────────────────────────────────────
+    st.subheader("📱 Passo 1 — Instalar o app ntfy no celular")
+    st.markdown("""
+O **ntfy** é gratuito e não precisa de cadastro. Baixe pelo link:
+- 🤖 Android: [play.google.com → ntfy](https://play.google.com/store/apps/details?id=io.heckel.ntfy)
+- 🍎 iPhone: [apps.apple.com → ntfy](https://apps.apple.com/app/ntfy/id1625396347)
+
+Depois de instalar, toque em **＋** e coloque o tópico que você vai criar abaixo.
+""")
+
+    # ── Passo 2: tópico ntfy ─────────────────────────────────────────────────
+    st.subheader("🔑 Passo 2 — Criar seu tópico")
+    st.caption("O tópico é como um canal privado. Use um nome único para que só você receba.")
+
+    saved_topic = config.get("ntfy_topic", "")
+    if "_topic_sugerido" in st.session_state:
+        saved_topic = st.session_state["_topic_sugerido"]
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        ntfy_topic = st.text_input(
+            "Nome do tópico",
+            value=saved_topic,
+            placeholder="Ex: boletos-familia-2026-abc",
+            label_visibility="collapsed",
+        )
+    with col2:
+        if st.button("🎲 Sortear", use_container_width=True):
+            aleatorio = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+            st.session_state["_topic_sugerido"] = f"boletos-{aleatorio}"
+            st.rerun()
+
+    if "_topic_sugerido" in st.session_state and ntfy_topic == st.session_state["_topic_sugerido"]:
+        st.info(f"Tópico sugerido: **{ntfy_topic}** — copie este nome exato no app ntfy!")
+
+    # ── Passo 3: horários ────────────────────────────────────────────────────
+    st.subheader("⏰ Passo 3 — Horários de notificação (horário de Brasília)")
+    st.caption(
+        "Um horário por linha, no formato HH:MM. "
+        "Use horários em ponto ou meia hora (ex: 08:00, 12:30, 20:00) "
+        "para maior precisão."
+    )
+
+    saved_horarios = config.get("horarios", "08:00,12:00,20:00")
+    # Converte vírgula (formato interno) → quebras de linha (para exibição)
+    saved_horarios_display = "\n".join(h.strip() for h in saved_horarios.split(",") if h.strip())
+
+    horarios_texto = st.text_area(
+        "Horários",
+        value=saved_horarios_display,
+        height=130,
+        placeholder="08:00\n13:00\n20:00",
+        label_visibility="collapsed",
+    )
+
+    # ── Botões Salvar / Testar ────────────────────────────────────────────────
+    st.markdown("")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("💾 Salvar", type="primary", use_container_width=True):
+            if not ntfy_topic.strip():
+                st.error("Digite um tópico ntfy.")
+            elif not SPREADSHEET_ID:
+                st.error("ID da planilha não configurado.")
+            else:
+                horarios_lista  = [h.strip() for h in horarios_texto.splitlines() if h.strip()]
+                horarios_validos, invalidos = [], []
+                for h in horarios_lista:
+                    if _re.match(r"^\d{1,2}:\d{2}$", h):
+                        try:
+                            hh, mm = map(int, h.split(":"))
+                            if 0 <= hh <= 23 and 0 <= mm <= 59:
+                                horarios_validos.append(f"{hh:02d}:{mm:02d}")
+                            else:
+                                invalidos.append(h)
+                        except Exception:
+                            invalidos.append(h)
+                    else:
+                        invalidos.append(h)
+
+                if invalidos:
+                    st.error(f"Horários inválidos: {', '.join(invalidos)}. Use o formato HH:MM.")
+                elif not horarios_validos:
+                    st.error("Adicione pelo menos um horário.")
+                else:
+                    horarios_str = ",".join(horarios_validos)
+                    with st.spinner("Salvando..."):
+                        ok = save_config(SPREADSHEET_ID, horarios_str, ntfy_topic.strip())
+                    if ok:
+                        st.session_state.pop("_topic_sugerido", None)
+                        st.success(
+                            f"✅ Salvo! Alertas nos horários: {', '.join(horarios_validos)} (BRT)"
+                        )
+                    else:
+                        st.error("Erro ao salvar. Tente novamente.")
+
+    with col2:
+        if st.button(
+            "📨 Testar agora",
+            disabled=not ntfy_topic.strip(),
+            use_container_width=True,
+        ):
+            try:
+                resp = _requests.post(
+                    f"https://ntfy.sh/{ntfy_topic.strip()}",
+                    data="✅ Configuração funcionando! Você receberá alertas de boletos aqui.".encode("utf-8"),
+                    headers={
+                        "Title": "Teste — Boletos & Cheques".encode("utf-8"),
+                        "Tags":  "white_check_mark,bell",
+                    },
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    st.success("📨 Notificação de teste enviada! Verifique o celular.")
+                else:
+                    st.error(f"Erro ao enviar (HTTP {resp.status_code}). Verifique o tópico.")
+            except Exception as e:
+                st.error(f"Erro de conexão: {e}")
+
+    # ── GitHub Secrets (passo final, só uma vez) ──────────────────────────────
+    st.markdown("")
+    with st.expander("⚙️ Passo 4 — Ativar envio automático (só precisa fazer uma vez)"):
+        st.markdown("""
+As notificações são enviadas automaticamente pelo **GitHub Actions** —
+funciona mesmo com o app fechado, 24 horas por dia.
+
+**Para ativar:**
+
+1. Acesse:
+   👉 [github.com/pedrixteste/boleto-tracker → Settings → Secrets and variables → Actions](https://github.com/pedrixteste/boleto-tracker/settings/secrets/actions)
+
+2. Clique em **New repository secret** e adicione dois secrets:
+
+   | Nome | Valor |
+   |------|-------|
+   | `SPREADSHEET_ID` | `1-Hi9HR3PTOFxJigMmpZaTrSccjFpGDSbS8pNHTqereg` |
+   | `GCP_SERVICE_ACCOUNT` | _(conteúdo inteiro do arquivo `credentials.json`)_ |
+
+3. Pronto! O GitHub vai verificar a cada 30 minutos se é hora de notificar.
+
+> 💡 **Dica:** Para testar manualmente, acesse o repositório → aba **Actions** →
+> "Notificações de Boletos Pendentes" → **Run workflow**.
+""")
+
+    st.markdown("")
+    if st.button("← Voltar"):
+        st.session_state.tela = "inicio"
+        st.rerun()
+
+
 # ── Roteador ──────────────────────────────────────────────────────────────────
 
 init_state()
@@ -559,6 +737,7 @@ telas = {
     "revisao":      tela_revisao,
     "confirmacao":  tela_confirmacao,
     "pendentes":    tela_pendentes,
+    "config":       tela_config,
 }
 
 telas[st.session_state.tela]()

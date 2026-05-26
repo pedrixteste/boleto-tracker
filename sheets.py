@@ -16,8 +16,11 @@ HEADERS = [
 ]
 
 # Entidades e bancos disponíveis
-ENTIDADES = ["VITHALL", "RBM", "PESSOAL"]
-BANCOS = ["Pagbank", "Banrisul", "Nubank", "Caixa", "Simples"]
+ENTIDADES  = ["VITHALL", "RBM", "PESSOAL"]
+BANCOS     = ["Pagbank", "Banrisul", "Nubank", "Caixa", "Simples"]
+
+# Aba de configuração (oculta — começa com _)
+CONFIG_TAB = "_Config"
 
 
 def _get_client():
@@ -64,15 +67,17 @@ def _get_or_create_sheet(spreadsheet_id: str, tab_name: str):
 
 
 def get_all_rows(spreadsheet_id: str) -> list:
-    """Retorna linhas de TODAS as abas, com _tab_name e _row_index."""
+    """Retorna linhas de TODAS as abas de boletos (ignora abas internas que começam com _)."""
     try:
         client = _get_client()
         spreadsheet = client.open_by_key(spreadsheet_id)
         all_rows = []
         for ws in spreadsheet.worksheets():
+            if ws.title.startswith("_"):
+                continue   # pula _Config e outras abas internas
             records = ws.get_all_records()
             for i, row in enumerate(records):
-                row["_tab_name"] = ws.title
+                row["_tab_name"]  = ws.title
                 row["_row_index"] = i + 2
             all_rows.extend(records)
         return all_rows
@@ -96,7 +101,7 @@ def append_row(spreadsheet_id: str, data: dict, tab_name: str) -> bool:
     """Adiciona uma linha na aba correta. Retorna True se sucesso."""
     try:
         sheet = _get_or_create_sheet(spreadsheet_id, tab_name)
-        today = date.today().strftime("%d/%m/%Y")
+        today    = date.today().strftime("%d/%m/%Y")
         next_row = len(sheet.get_all_values()) + 1
         dias_formula = f'=SE(E{next_row}="";"";VALOR(TEXTO(E{next_row};"DD/MM/AAAA"))-HOJE())'
 
@@ -115,4 +120,45 @@ def append_row(spreadsheet_id: str, data: dict, tab_name: str) -> bool:
         return True
     except Exception as e:
         st.error(f"Erro ao salvar na planilha: {e}")
+        return False
+
+
+# ── Configuração de alertas ───────────────────────────────────────────────────
+
+def get_config(spreadsheet_id: str) -> dict:
+    """Lê configurações (horários, tópico ntfy) da aba _Config."""
+    try:
+        client = _get_client()
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        try:
+            ws = spreadsheet.worksheet(CONFIG_TAB)
+        except gspread.WorksheetNotFound:
+            return {}
+        config = {}
+        for row in ws.get_all_values()[1:]:   # pula header
+            if len(row) >= 2 and row[0].strip():
+                config[row[0].strip()] = row[1].strip()
+        return config
+    except Exception as e:
+        st.error(f"Erro ao ler configurações: {e}")
+        return {}
+
+
+def save_config(spreadsheet_id: str, horarios: str, ntfy_topic: str) -> bool:
+    """Salva configurações na aba _Config (cria se não existir)."""
+    try:
+        client = _get_client()
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        try:
+            ws = spreadsheet.worksheet(CONFIG_TAB)
+            ws.clear()
+        except gspread.WorksheetNotFound:
+            ws = spreadsheet.add_worksheet(title=CONFIG_TAB, rows=20, cols=2)
+
+        ws.append_row(["Chave", "Valor"])
+        ws.append_row(["horarios",   horarios])
+        ws.append_row(["ntfy_topic", ntfy_topic])
+        return True
+    except Exception as e:
+        st.error(f"Erro ao salvar configurações: {e}")
         return False

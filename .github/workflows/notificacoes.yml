@@ -1,0 +1,30 @@
+name: Notificações de Boletos Pendentes
+
+on:
+  schedule:
+    # Executa a cada 30 minutos (UTC).
+    # O script converte para BRT (UTC-3) e verifica se é hora de notificar.
+    - cron: '0,30 * * * *'
+  workflow_dispatch:   # Permite rodar manualmente pela aba Actions do GitHub
+
+jobs:
+  notificar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependências
+        run: pip install gspread google-auth requests
+
+      - name: Enviar notificações
+        env:
+          SPREADSHEET_ID:       ${{ secrets.SPREADSHEET_ID }}
+          GCP_SERVICE_ACCOUNT:  ${{ secrets.GCP_SERVICE_ACCOUNT }}
+        run: python notifier.py
