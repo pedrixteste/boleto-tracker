@@ -24,11 +24,24 @@ CONFIG_TAB = "_Config"
 
 
 def _get_client():
+    info = None
     try:
-        info = json.loads(st.secrets["gcp_service_account"])
+        raw = st.secrets["gcp_service_account"]
+        # st.secrets pode retornar string (secrets.toml) ou dict (Streamlit Cloud)
+        if isinstance(raw, str):
+            info = json.loads(raw)
+        else:
+            info = dict(raw)   # AttrDict → dict normal
     except Exception:
-        with open("credentials.json") as f:
-            info = json.load(f)
+        pass
+
+    if info is None:
+        try:
+            with open("credentials.json") as f:
+                info = json.load(f)
+        except FileNotFoundError:
+            raise RuntimeError("Credenciais Google não encontradas.")
+
     creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     return gspread.authorize(creds)
 
@@ -139,13 +152,12 @@ def get_config(spreadsheet_id: str) -> dict:
             if len(row) >= 2 and row[0].strip():
                 config[row[0].strip()] = row[1].strip()
         return config
-    except Exception as e:
-        st.error(f"Erro ao ler configurações: {e}")
+    except Exception:
         return {}
 
 
 def save_config(spreadsheet_id: str, ntfy_topic: str) -> bool:
-    """Salva o tópico ntfy na aba _Config (cria se não existir)."""
+    """Salva o tópico ntfy na aba _Config (cria se não existir). Retorna True se OK."""
     try:
         client = _get_client()
         spreadsheet = client.open_by_key(spreadsheet_id)
@@ -158,6 +170,5 @@ def save_config(spreadsheet_id: str, ntfy_topic: str) -> bool:
         ws.append_row(["Chave", "Valor"])
         ws.append_row(["ntfy_topic", ntfy_topic])
         return True
-    except Exception as e:
-        st.error(f"Erro ao salvar configurações: {e}")
-        return False
+    except Exception:
+        return False   # Caller trata o erro — não chamar st.* aqui
