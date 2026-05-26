@@ -621,16 +621,15 @@ Depois de instalar, toque em **＋** e coloque o tópico que você vai criar aba
             elif not SPREADSHEET_ID:
                 st.error("ID da planilha não configurado.")
             else:
-                # Sem spinner — evita conflito de contexto Streamlit
                 try:
-                    ok = save_config(SPREADSHEET_ID, ntfy_topic.strip())
-                except Exception:
-                    ok = False
+                    ok, err_msg = save_config(SPREADSHEET_ID, ntfy_topic.strip())
+                except Exception as e:
+                    ok, err_msg = False, f"{type(e).__name__}: {e}"
                 if ok:
                     st.session_state.pop("_topic_sugerido", None)
                     st.success("✅ Tópico salvo! Alertas serão enviados diariamente às 07:30.")
                 else:
-                    st.error("Erro ao salvar. Tente novamente.")
+                    st.error(f"Erro ao salvar: {err_msg}")
 
     with col2:
         if st.button(

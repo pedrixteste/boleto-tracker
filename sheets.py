@@ -155,8 +155,8 @@ def get_config(spreadsheet_id: str) -> dict:
         return {}
 
 
-def save_config(spreadsheet_id: str, ntfy_topic: str) -> bool:
-    """Salva o tópico ntfy na aba _Config (cria se não existir). Retorna True se OK."""
+def save_config(spreadsheet_id: str, ntfy_topic: str):
+    """Salva o tópico ntfy na aba _Config. Retorna (True, '') ou (False, msg_erro)."""
     try:
         client = _get_client()
         spreadsheet = client.open_by_key(spreadsheet_id)
@@ -168,6 +168,10 @@ def save_config(spreadsheet_id: str, ntfy_topic: str) -> bool:
 
         ws.append_row(["Chave", "Valor"])
         ws.append_row(["ntfy_topic", ntfy_topic])
-        return True
-    except Exception:
-        return False   # Caller trata o erro — não chamar st.* aqui
+        return True, ""
+    except Exception as e:
+        import traceback
+        msg = f"{type(e).__name__}: {e}"
+        print(f"[save_config] ERRO: {msg}")
+        print(traceback.format_exc())
+        return False, msg
