@@ -1,5 +1,4 @@
 import gspread
-from google.oauth2.service_account import Credentials
 from datetime import date
 import streamlit as st
 import json
@@ -43,8 +42,7 @@ def _get_client():
         except FileNotFoundError:
             raise RuntimeError("Credenciais Google não encontradas.")
 
-    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
-    return gspread.authorize(creds)
+    return gspread.service_account_from_dict(info, scopes=SCOPES)
 
 
 def _aplicar_filtro(spreadsheet, sheet):

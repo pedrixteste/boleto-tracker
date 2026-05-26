@@ -567,11 +567,13 @@ def tela_config():
     )
     st.markdown("")
 
-    # Carrega config salva
+    # Carrega config salva (sem spinner — evita conflito de contexto Streamlit)
     config = {}
     if SPREADSHEET_ID:
-        with st.spinner("Carregando..."):
+        try:
             config = get_config(SPREADSHEET_ID)
+        except Exception:
+            config = {}
 
     # ── Passo 1: instalar ntfy ────────────────────────────────────────────────
     st.subheader("📱 Passo 1 — Instalar o app ntfy")
@@ -619,8 +621,11 @@ Depois de instalar, toque em **＋** e coloque o tópico que você vai criar aba
             elif not SPREADSHEET_ID:
                 st.error("ID da planilha não configurado.")
             else:
-                with st.spinner("Salvando..."):
+                # Sem spinner — evita conflito de contexto Streamlit
+                try:
                     ok = save_config(SPREADSHEET_ID, ntfy_topic.strip())
+                except Exception:
+                    ok = False
                 if ok:
                     st.session_state.pop("_topic_sugerido", None)
                     st.success("✅ Tópico salvo! Alertas serão enviados diariamente às 07:30.")
