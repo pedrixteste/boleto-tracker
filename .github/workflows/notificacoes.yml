@@ -2,9 +2,8 @@ name: Notificações de Boletos Pendentes
 
 on:
   schedule:
-    # Executa a cada 30 minutos (UTC).
-    # O script converte para BRT (UTC-3) e verifica se é hora de notificar.
-    - cron: '0,30 * * * *'
+    # 10:30 UTC = 07:30 BRT (Brasil não tem horário de verão desde 2020)
+    - cron: '30 10 * * *'
   workflow_dispatch:   # Permite rodar manualmente pela aba Actions do GitHub
 
 jobs:
@@ -25,6 +24,6 @@ jobs:
 
       - name: Enviar notificações
         env:
-          SPREADSHEET_ID:       ${{ secrets.SPREADSHEET_ID }}
-          GCP_SERVICE_ACCOUNT:  ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          SPREADSHEET_ID:      ${{ secrets.SPREADSHEET_ID }}
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
         run: python notifier.py

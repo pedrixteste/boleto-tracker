@@ -144,8 +144,8 @@ def get_config(spreadsheet_id: str) -> dict:
         return {}
 
 
-def save_config(spreadsheet_id: str, horarios: str, ntfy_topic: str) -> bool:
-    """Salva configurações na aba _Config (cria se não existir)."""
+def save_config(spreadsheet_id: str, ntfy_topic: str) -> bool:
+    """Salva o tópico ntfy na aba _Config (cria se não existir)."""
     try:
         client = _get_client()
         spreadsheet = client.open_by_key(spreadsheet_id)
@@ -156,7 +156,6 @@ def save_config(spreadsheet_id: str, horarios: str, ntfy_topic: str) -> bool:
             ws = spreadsheet.add_worksheet(title=CONFIG_TAB, rows=20, cols=2)
 
         ws.append_row(["Chave", "Valor"])
-        ws.append_row(["horarios",   horarios])
         ws.append_row(["ntfy_topic", ntfy_topic])
         return True
     except Exception as e:

@@ -560,25 +560,23 @@ def tela_pendentes():
 # ── Tela 7: Configuração de Alertas ──────────────────────────────────────────
 
 def tela_config():
-    import re as _re
-
     st.title("🔔 Configurar Alertas")
     st.markdown(
-        "Receba uma notificação no celular todo dia nos horários que você escolher, "
-        "para cada boleto ainda não pago — vencido ou não."
+        "Todo dia às **07:30**, cada boleto não pago gera uma notificação "
+        "no seu celular — 1 dia antes, no dia do vencimento e todo dia depois disso até pagar."
     )
     st.markdown("")
 
     # Carrega config salva
     config = {}
     if SPREADSHEET_ID:
-        with st.spinner("Carregando configurações..."):
+        with st.spinner("Carregando..."):
             config = get_config(SPREADSHEET_ID)
 
     # ── Passo 1: instalar ntfy ────────────────────────────────────────────────
-    st.subheader("📱 Passo 1 — Instalar o app ntfy no celular")
+    st.subheader("📱 Passo 1 — Instalar o app ntfy")
     st.markdown("""
-O **ntfy** é gratuito e não precisa de cadastro. Baixe pelo link:
+Baixe o app **ntfy** no celular (gratuito, sem cadastro):
 - 🤖 Android: [play.google.com → ntfy](https://play.google.com/store/apps/details?id=io.heckel.ntfy)
 - 🍎 iPhone: [apps.apple.com → ntfy](https://apps.apple.com/app/ntfy/id1625396347)
 
@@ -586,8 +584,8 @@ Depois de instalar, toque em **＋** e coloque o tópico que você vai criar aba
 """)
 
     # ── Passo 2: tópico ntfy ─────────────────────────────────────────────────
-    st.subheader("🔑 Passo 2 — Criar seu tópico")
-    st.caption("O tópico é como um canal privado. Use um nome único para que só você receba.")
+    st.subheader("🔑 Passo 2 — Definir seu tópico")
+    st.caption("É como um canal privado. Use um nome único para que só você receba.")
 
     saved_topic = config.get("ntfy_topic", "")
     if "_topic_sugerido" in st.session_state:
@@ -607,28 +605,8 @@ Depois de instalar, toque em **＋** e coloque o tópico que você vai criar aba
             st.session_state["_topic_sugerido"] = f"boletos-{aleatorio}"
             st.rerun()
 
-    if "_topic_sugerido" in st.session_state and ntfy_topic == st.session_state["_topic_sugerido"]:
+    if "_topic_sugerido" in st.session_state and ntfy_topic == st.session_state.get("_topic_sugerido"):
         st.info(f"Tópico sugerido: **{ntfy_topic}** — copie este nome exato no app ntfy!")
-
-    # ── Passo 3: horários ────────────────────────────────────────────────────
-    st.subheader("⏰ Passo 3 — Horários de notificação (horário de Brasília)")
-    st.caption(
-        "Um horário por linha, no formato HH:MM. "
-        "Use horários em ponto ou meia hora (ex: 08:00, 12:30, 20:00) "
-        "para maior precisão."
-    )
-
-    saved_horarios = config.get("horarios", "08:00,12:00,20:00")
-    # Converte vírgula (formato interno) → quebras de linha (para exibição)
-    saved_horarios_display = "\n".join(h.strip() for h in saved_horarios.split(",") if h.strip())
-
-    horarios_texto = st.text_area(
-        "Horários",
-        value=saved_horarios_display,
-        height=130,
-        placeholder="08:00\n13:00\n20:00",
-        label_visibility="collapsed",
-    )
 
     # ── Botões Salvar / Testar ────────────────────────────────────────────────
     st.markdown("")
@@ -641,36 +619,13 @@ Depois de instalar, toque em **＋** e coloque o tópico que você vai criar aba
             elif not SPREADSHEET_ID:
                 st.error("ID da planilha não configurado.")
             else:
-                horarios_lista  = [h.strip() for h in horarios_texto.splitlines() if h.strip()]
-                horarios_validos, invalidos = [], []
-                for h in horarios_lista:
-                    if _re.match(r"^\d{1,2}:\d{2}$", h):
-                        try:
-                            hh, mm = map(int, h.split(":"))
-                            if 0 <= hh <= 23 and 0 <= mm <= 59:
-                                horarios_validos.append(f"{hh:02d}:{mm:02d}")
-                            else:
-                                invalidos.append(h)
-                        except Exception:
-                            invalidos.append(h)
-                    else:
-                        invalidos.append(h)
-
-                if invalidos:
-                    st.error(f"Horários inválidos: {', '.join(invalidos)}. Use o formato HH:MM.")
-                elif not horarios_validos:
-                    st.error("Adicione pelo menos um horário.")
+                with st.spinner("Salvando..."):
+                    ok = save_config(SPREADSHEET_ID, ntfy_topic.strip())
+                if ok:
+                    st.session_state.pop("_topic_sugerido", None)
+                    st.success("✅ Tópico salvo! Alertas serão enviados diariamente às 07:30.")
                 else:
-                    horarios_str = ",".join(horarios_validos)
-                    with st.spinner("Salvando..."):
-                        ok = save_config(SPREADSHEET_ID, horarios_str, ntfy_topic.strip())
-                    if ok:
-                        st.session_state.pop("_topic_sugerido", None)
-                        st.success(
-                            f"✅ Salvo! Alertas nos horários: {', '.join(horarios_validos)} (BRT)"
-                        )
-                    else:
-                        st.error("Erro ao salvar. Tente novamente.")
+                    st.error("Erro ao salvar. Tente novamente.")
 
     with col2:
         if st.button(
@@ -681,7 +636,7 @@ Depois de instalar, toque em **＋** e coloque o tópico que você vai criar aba
             try:
                 resp = _requests.post(
                     f"https://ntfy.sh/{ntfy_topic.strip()}",
-                    data="✅ Configuração funcionando! Você receberá alertas de boletos aqui.".encode("utf-8"),
+                    data="✅ Configuração funcionando! Alertas de boletos chegarão aqui às 07:30.".encode("utf-8"),
                     headers={
                         "Title": "Teste — Boletos & Cheques".encode("utf-8"),
                         "Tags":  "white_check_mark,bell",
@@ -695,29 +650,30 @@ Depois de instalar, toque em **＋** e coloque o tópico que você vai criar aba
             except Exception as e:
                 st.error(f"Erro de conexão: {e}")
 
-    # ── GitHub Secrets (passo final, só uma vez) ──────────────────────────────
+    # ── Passo 3: GitHub Secrets (só uma vez) ─────────────────────────────────
     st.markdown("")
-    with st.expander("⚙️ Passo 4 — Ativar envio automático (só precisa fazer uma vez)"):
+    with st.expander("⚙️ Passo 3 — Ativar envio automático (só uma vez, no computador)"):
         st.markdown("""
-As notificações são enviadas automaticamente pelo **GitHub Actions** —
-funciona mesmo com o app fechado, 24 horas por dia.
+As notificações são disparadas pelo **GitHub Actions** todo dia às 07:30 —
+funcionam mesmo com o app fechado.
 
 **Para ativar:**
 
-1. Acesse:
-   👉 [github.com/pedrixteste/boleto-tracker → Settings → Secrets and variables → Actions](https://github.com/pedrixteste/boleto-tracker/settings/secrets/actions)
+1. Acesse este link:
+   👉 [Abrir configurações de secrets do GitHub](https://github.com/pedrixteste/boleto-tracker/settings/secrets/actions)
 
-2. Clique em **New repository secret** e adicione dois secrets:
+2. Clique em **New repository secret** e adicione **2 secrets**:
 
    | Nome | Valor |
    |------|-------|
    | `SPREADSHEET_ID` | `1-Hi9HR3PTOFxJigMmpZaTrSccjFpGDSbS8pNHTqereg` |
-   | `GCP_SERVICE_ACCOUNT` | _(conteúdo inteiro do arquivo `credentials.json`)_ |
+   | `GCP_SERVICE_ACCOUNT` | conteúdo inteiro do arquivo `credentials.json` |
 
-3. Pronto! O GitHub vai verificar a cada 30 minutos se é hora de notificar.
+3. Pronto! A partir daí as notificações são automáticas todo dia às 07:30.
 
-> 💡 **Dica:** Para testar manualmente, acesse o repositório → aba **Actions** →
-> "Notificações de Boletos Pendentes" → **Run workflow**.
+---
+💡 **Testar manualmente:** Acesse o repositório → aba **Actions** →
+_"Notificações de Boletos Pendentes"_ → botão **Run workflow**.
 """)
 
     st.markdown("")
