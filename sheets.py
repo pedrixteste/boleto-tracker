@@ -157,6 +157,8 @@ def get_config(spreadsheet_id: str) -> dict:
 
 def save_config(spreadsheet_id: str, ntfy_topic: str):
     """Salva o tópico ntfy na aba _Config. Retorna (True, '') ou (False, msg_erro)."""
+    # DEBUG — confirma que a versão nova está rodando
+    print(f"[save_config v3] sid={repr(str(spreadsheet_id))[:25]} topic={repr(ntfy_topic)[:30]}")
     try:
         client = _get_client()
         spreadsheet = client.open_by_key(spreadsheet_id)

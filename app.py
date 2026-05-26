@@ -12,6 +12,8 @@ import random
 import string
 import requests as _requests
 
+import importlib, sheets as _sheets_mod
+importlib.reload(_sheets_mod)   # garante que o módulo não está cacheado
 from sheets import append_row, get_all_rows, update_status, get_config, save_config, ENTIDADES, BANCOS
 
 
