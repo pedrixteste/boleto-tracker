@@ -31,7 +31,8 @@ def _get_client():
         if isinstance(raw, str):
             info = json.loads(raw)
         else:
-            info = dict(raw)   # AttrDict → dict normal
+            # AttrDict → dict normal (json round-trip para converter objetos aninhados)
+            info = json.loads(json.dumps(dict(raw)))
     except Exception:
         pass
 
