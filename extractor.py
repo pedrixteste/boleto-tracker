@@ -194,6 +194,11 @@ def _parse_boleto_44(code: str) -> dict:
     """Decodifica código de barras bancário de 44 dígitos (FEBRABAN)."""
     if len(code) < 44 or code.startswith("000201"):
         return {}
+    # Dígito de moeda (posição 3) deve ser '9' para boleto bancário Real (FEBRABAN).
+    # Chaves de acesso NF-e (ex: contas de energia) também têm 44 dígitos mas
+    # têm outro valor aqui — rejeitar para não gerar valores sem sentido.
+    if code[3] != '9':
+        return {}
 
     valor_str = code[9:19]
     try:
@@ -216,41 +221,42 @@ def _parse_boleto_44(code: str) -> dict:
     return {"valor": valor, "vencimento": vencimento, "codigo": code}
 
 
-def _tentar_qr(pil_img: Image.Image) -> str:
-    """Tenta ler QR code com múltiplos pré-processamentos."""
+def _tentar_todos_codigos(pil_img: Image.Image) -> list:
+    """Retorna TODOS os códigos (QR/barras) únicos encontrados na imagem."""
     if not PYZBAR_OK:
-        return ""
+        return []
 
     tentativas = [pil_img]
 
-    # Versões processadas para tentar
     if CV2_OK:
         img_np = np.array(pil_img.convert("RGB"))
         gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-
-        # 1. Threshold simples (ótimo para QR)
         _, thresh1 = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY)
         tentativas.append(Image.fromarray(thresh1))
-
-        # 2. Upscale 2x + threshold
         h, w = gray.shape
         big = cv2.resize(gray, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
         _, thresh2 = cv2.threshold(big, 128, 255, cv2.THRESH_BINARY)
         tentativas.append(Image.fromarray(thresh2))
-
-        # 3. Aumenta contraste antes do threshold
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(gray)
         _, thresh3 = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         tentativas.append(Image.fromarray(thresh3))
 
+    seen: set = set()
+    todos: list = []
     for img in tentativas:
-        codes = pyzbar_decode(img)
-        for c in codes:
+        for c in pyzbar_decode(img):
             raw = c.data.decode("utf-8", errors="ignore").strip()
-            if raw:
-                return raw
-    return ""
+            if raw and raw not in seen:
+                seen.add(raw)
+                todos.append(raw)
+    return todos
+
+
+# Mantém compatibilidade com chamadas antigas
+def _tentar_qr(pil_img: Image.Image) -> str:
+    result = _tentar_todos_codigos(pil_img)
+    return result[0] if result else ""
 
 
 def _tentar_zxing(pil_img: Image.Image) -> str:
@@ -296,14 +302,25 @@ def extract_boleto(pil_img: Image.Image) -> dict:
     """Extrai dados de boleto: zxingcpp > pyzbar > OCR (fallback vazio)."""
     result = {"tipo": "Boleto", "beneficiario": "", "valor": "", "vencimento": "", "codigo": "", "observacoes": ""}
 
-    # 1. Tenta zxingcpp (melhor para fotos comprimidas: suporta ITF + QR)
-    raw = _tentar_zxing(pil_img)
+    # Coleta TODOS os códigos encontrados na imagem
+    todos_raw: list = []
+    raw_zxing = _tentar_zxing(pil_img)
+    if raw_zxing:
+        todos_raw.append(raw_zxing)
+    for r in _tentar_todos_codigos(pil_img):
+        if r not in todos_raw:
+            todos_raw.append(r)
 
-    # 2. Fallback: pyzbar com múltiplos preprocessamentos
-    if not raw:
-        raw = _tentar_qr(pil_img)
+    # Ordena: QR PIX (EMV) > boleto bancário FEBRABAN válido (moeda=9) > outros
+    def _prio(r: str) -> int:
+        if r.startswith("000201"):
+            return 0
+        d = re.sub(r"\D", "", r)
+        return 1 if len(d) >= 44 and d[3] == '9' else 2
 
-    if raw:
+    todos_raw.sort(key=_prio)
+
+    for raw in todos_raw:
         # QR Code PIX (EMV)
         if raw.startswith("000201"):
             parsed = _parse_pix_emv(raw)
@@ -322,7 +339,7 @@ def extract_boleto(pil_img: Image.Image) -> dict:
                             result["vencimento"] = dates[0]
                 return result
 
-        # Código de barras tradicional (44 dígitos)
+        # Código de barras bancário FEBRABAN (44 dígitos, moeda=9)
         digits_only = re.sub(r"\D", "", raw)
         if len(digits_only) >= 44:
             parsed = _parse_boleto_44(digits_only[:44])
