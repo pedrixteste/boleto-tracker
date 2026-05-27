@@ -122,7 +122,7 @@ def _ocr_vencimento(pil_img: Image.Image) -> str:
             return m.group(1)
 
     # Fallback: primeira data futura encontrada no texto
-    dates = re.findall(r"\b(\d{2}/\d{2}/20[2-9]\d)\b", text)
+    dates = re.findall(r"(\d{2}/\d{2}/20[2-9]\d)", text)
     if dates:
         return dates[0]
 
@@ -206,7 +206,7 @@ def _extrair_dados_texto(text: str) -> dict:
             break
     if "vencimento" not in result:
         # Datas com ano >= 2024 (evita pegar datas antigas do documento)
-        dates = re.findall(r"\b(\d{2}/\d{2}/20[2-9]\d)\b", text)
+        dates = re.findall(r"(\d{2}/\d{2}/20[2-9]\d)", text)
         if dates:
             result["vencimento"] = dates[0]
 
@@ -415,16 +415,20 @@ def extract_boleto(pil_img: Image.Image) -> dict:
             if parsed.get("valor"):
                 result.update(parsed)
                 result["codigo"] = raw[:60] + "..." if len(raw) > 60 else raw
-                # Tenta pegar vencimento via OCR (não vem no PIX)
-                if TESSERACT_OK:
-                    text = _ocr_text(pil_img)
-                    m = re.search(r"Vencimento[\s\n:]+(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE)
-                    if m:
-                        result["vencimento"] = m.group(1)
-                    else:
-                        dates = re.findall(r"\b(\d{2}/\d{2}/20[2-9]\d)\b", text)
-                        if dates:
-                            result["vencimento"] = dates[0]
+                # Boletos bancários modernos têm QR PIX + código de barras ITF.
+                # Pega vencimento do código de barras ITF (mais confiável que OCR).
+                for other in todos_raw:
+                    if other == raw:
+                        continue
+                    other_digits = re.sub(r"\D", "", other)
+                    if len(other_digits) >= 44:
+                        itf = _parse_boleto_44(other_digits[:44])
+                        if itf and itf.get("vencimento"):
+                            result["vencimento"] = itf["vencimento"]
+                            break
+                # Se ainda sem vencimento, tenta OCR
+                if not result.get("vencimento"):
+                    result["vencimento"] = _ocr_vencimento(pil_img)
                 return result
 
         # Código de barras — tenta boleto bancário, depois arrecadação
