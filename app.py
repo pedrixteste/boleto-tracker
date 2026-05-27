@@ -316,6 +316,16 @@ def tela_captura():
                 if tipo == "Boleto":
                     with st.spinner("Lendo PDF..."):
                         extracted = extract_boleto_pdf(dados_arq)
+                    # PDF sem texto (ex: foto convertida para PDF) → tenta via imagem
+                    _achou_algo = any([
+                        extracted.get("valor"),
+                        extracted.get("codigo"),
+                        extracted.get("beneficiario"),
+                    ])
+                    if not _achou_algo:
+                        with st.spinner("PDF parece ser uma imagem, tentando leitura visual..."):
+                            img_pdf = pdf_to_image(dados_arq)
+                            extracted = extract_boleto(img_pdf)
                     st.session_state.dados  = extracted
                     st.session_state.imagem = pdf_to_image(dados_arq)
                     st.session_state.tela   = "revisao"
