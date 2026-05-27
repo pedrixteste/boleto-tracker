@@ -160,6 +160,11 @@ def tela_inicio():
         st.rerun()
 
     st.markdown("")
+    if st.button("📅 Lembretes de conta mensal", use_container_width=True):
+        st.session_state.tela = "lembretes"
+        st.rerun()
+
+    st.markdown("")
     if st.button("🔔 Configurar alertas", use_container_width=True):
         st.session_state.tela = "config"
         st.rerun()
@@ -569,7 +574,35 @@ def tela_pendentes():
         st.rerun()
 
 
-# ── Tela 7: Configuração de Alertas ──────────────────────────────────────────
+# ── Tela 7: Lembretes de Conta Mensal ────────────────────────────────────────
+
+SECOES_LEMBRETES = ["Pessoal", "RBM", "Vithall", "Anaelena"]
+
+def tela_lembretes():
+    st.title("📅 Lembretes de Conta Mensal")
+    st.caption("Contas fixas mensais que precisam ser fotografadas e registradas.")
+    st.markdown("")
+
+    secao = st.session_state.get("lembrete_secao", SECOES_LEMBRETES[0])
+
+    cols = st.columns(len(SECOES_LEMBRETES))
+    for i, nome in enumerate(SECOES_LEMBRETES):
+        with cols[i]:
+            if st.button(nome, use_container_width=True,
+                         type="primary" if secao == nome else "secondary"):
+                st.session_state.lembrete_secao = nome
+                st.rerun()
+
+    st.markdown("---")
+    st.info(f"Seção **{secao}** — em breve.")
+
+    st.markdown("")
+    if st.button("← Voltar"):
+        st.session_state.tela = "inicio"
+        st.rerun()
+
+
+# ── Tela 8: Configuração de Alertas ──────────────────────────────────────────
 
 def tela_config():
     st.title("🔔 Configurar Alertas")
@@ -709,6 +742,7 @@ telas = {
     "revisao":      tela_revisao,
     "confirmacao":  tela_confirmacao,
     "pendentes":    tela_pendentes,
+    "lembretes":    tela_lembretes,
     "config":       tela_config,
 }
 
