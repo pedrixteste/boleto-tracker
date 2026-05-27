@@ -74,7 +74,14 @@ def _ocr_text(pil_img: Image.Image) -> str:
     if not TESSERACT_OK:
         return ""
     processed = _preprocess(pil_img)
-    text = pytesseract.image_to_string(processed, lang="por", config="--psm 6")
+    try:
+        text = pytesseract.image_to_string(processed, lang="por", config="--psm 6")
+    except Exception:
+        # Pacote 'por' não instalado — tenta inglês como fallback
+        try:
+            text = pytesseract.image_to_string(processed, lang="eng", config="--psm 6")
+        except Exception:
+            return ""
     return text
 
 
