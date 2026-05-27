@@ -190,13 +190,34 @@ def extract_boleto_pdf(pdf_bytes: bytes) -> dict:
 
 # ── Extração de boleto a partir de imagem ─────────────────────────────────────
 
+def _parse_arrecadacao_44(code: str) -> dict:
+    """
+    Decodifica código de arrecadação de concessionárias (energia, água, gás,
+    telecom) — barras que começam com '8' (FEBRABAN cobrança/arrecadação).
+    Nesses códigos o valor está nas posições 4–14 (11 dígitos).
+    """
+    if len(code) < 44 or code[0] != '8':
+        return {}
+    try:
+        valor_cents = int(code[4:15])
+        if valor_cents <= 0:
+            return {}
+        valor = f"{valor_cents / 100:.2f}".replace(".", ",")
+    except ValueError:
+        return {}
+    return {"valor": valor, "vencimento": "", "codigo": code}
+
+
 def _parse_boleto_44(code: str) -> dict:
     """Decodifica código de barras bancário de 44 dígitos (FEBRABAN)."""
     if len(code) < 44 or code.startswith("000201"):
         return {}
-    # Dígito de moeda (posição 3) deve ser '9' para boleto bancário Real (FEBRABAN).
-    # Chaves de acesso NF-e (ex: contas de energia) também têm 44 dígitos mas
-    # têm outro valor aqui — rejeitar para não gerar valores sem sentido.
+    # Códigos de arrecadação (energia, água, etc.) começam com '8' —
+    # têm formato diferente e são tratados em _parse_arrecadacao_44.
+    if code[0] == '8':
+        return {}
+    # Dígito de moeda (posição 3) deve ser '9' para boleto bancário Real.
+    # Chaves de acesso NF-e também têm 44 dígitos mas position 3 ≠ '9'.
     if code[3] != '9':
         return {}
 
@@ -339,10 +360,12 @@ def extract_boleto(pil_img: Image.Image) -> dict:
                             result["vencimento"] = dates[0]
                 return result
 
-        # Código de barras bancário FEBRABAN (44 dígitos, moeda=9)
+        # Código de barras — tenta boleto bancário, depois arrecadação
         digits_only = re.sub(r"\D", "", raw)
         if len(digits_only) >= 44:
             parsed = _parse_boleto_44(digits_only[:44])
+            if not parsed:
+                parsed = _parse_arrecadacao_44(digits_only[:44])
             if parsed:
                 result.update(parsed)
                 result["codigo"] = digits_only[:44]
