@@ -98,13 +98,16 @@ def _ocr_vencimento(pil_img: Image.Image) -> str:
     if not text:
         return ""
 
-    # Padrões em ordem de prioridade — aceita qualquer coisa (até 30 chars)
-    # entre a palavra-chave e a data para lidar com OCR imperfeito
+    # Padrões em ordem de prioridade.
+    # Usamos {0,80} para tolerar tabelas multi-coluna onde a palavra-chave
+    # "VENCIMENTO" é cabeçalho de coluna e a data está na linha seguinte,
+    # separada pelas demais colunas (ex: Certel — "VENCIMENTO TOTAL A PAGAR
+    # COMPETÊNCIA\n63.328.095-39 22/06/2026 1.518,46 MAI/2026").
     _PAT_VENC = [
-        r"Vencimento[\s\S]{0,30}?(\d{2}/\d{2}/\d{4})",
-        r"\bVENC(?:IMENTO)?\b[\s\S]{0,30}?(\d{2}/\d{2}/\d{4})",
-        r"Data\s+(?:de\s+)?Venc(?:imento)?[\s\S]{0,30}?(\d{2}/\d{2}/\d{4})",
-        r"Vence(?:\s+em)?[\s\S]{0,20}?(\d{2}/\d{2}/\d{4})",
+        r"Vencimento[\s\S]{0,80}?(\d{2}/\d{2}/\d{4})",
+        r"\bVENC(?:IMENTO)?\b[\s\S]{0,80}?(\d{2}/\d{2}/\d{4})",
+        r"Data\s+(?:de\s+)?Venc(?:imento)?[\s\S]{0,80}?(\d{2}/\d{2}/\d{4})",
+        r"Vence(?:\s+em)?[\s\S]{0,40}?(\d{2}/\d{2}/\d{4})",
     ]
     for pat in _PAT_VENC:
         m = re.search(pat, text, re.IGNORECASE)
@@ -184,10 +187,10 @@ def _extrair_dados_texto(text: str) -> dict:
 
     # Vencimento: múltiplos padrões de faturas brasileiras
     _venc_pats = [
-        r"Vencimento[\s\S]{0,30}?(\d{2}/\d{2}/\d{4})",
-        r"\bVENC(?:IMENTO)?\b[\s\S]{0,30}?(\d{2}/\d{2}/\d{4})",
-        r"Data\s+(?:de\s+)?Venc(?:imento)?[\s\S]{0,30}?(\d{2}/\d{2}/\d{4})",
-        r"Vence(?:\s+em)?[\s\S]{0,20}?(\d{2}/\d{2}/\d{4})",
+        r"Vencimento[\s\S]{0,80}?(\d{2}/\d{2}/\d{4})",
+        r"\bVENC(?:IMENTO)?\b[\s\S]{0,80}?(\d{2}/\d{2}/\d{4})",
+        r"Data\s+(?:de\s+)?Venc(?:imento)?[\s\S]{0,80}?(\d{2}/\d{2}/\d{4})",
+        r"Vence(?:\s+em)?[\s\S]{0,40}?(\d{2}/\d{2}/\d{4})",
     ]
     for _pat in _venc_pats:
         m = re.search(_pat, text, re.IGNORECASE)
@@ -282,8 +285,16 @@ def _parse_boleto_44(code: str) -> dict:
     try:
         fator = int(fator_str)
         if fator > 0:
-            base = date(1997, 10, 7)
-            venc_date = base + timedelta(days=fator)
+            # Base antiga: 07/10/1997. Fator 9999 = 21/02/2025 (último dia).
+            # A partir de 22/02/2025 o FEBRABAN resetou o contador para 1000.
+            # Nova base: 29/05/2022 (= 22/02/2025 - 1000 dias).
+            _BASE_OLD  = date(1997, 10, 7)
+            _BASE_NOVA = date(2022, 5, 29)
+            venc_date = _BASE_OLD + timedelta(days=fator)
+            # Se a data calculada com a base antiga for mais de 6 meses atrás,
+            # o boleto pertence ao novo ciclo (pós-reset) → recalcula com base nova.
+            if venc_date < date.today() - timedelta(days=180):
+                venc_date = _BASE_NOVA + timedelta(days=fator)
             vencimento = venc_date.strftime("%d/%m/%Y")
     except (ValueError, OverflowError):
         pass
