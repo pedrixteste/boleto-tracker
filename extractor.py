@@ -78,6 +78,47 @@ def _ocr_text(pil_img: Image.Image) -> str:
     return text
 
 
+def _ocr_vencimento(pil_img: Image.Image) -> str:
+    """
+    Extrai data de vencimento via OCR para faturas de concessionárias
+    (energia, água, gás, telecom) onde o vencimento NÃO está codificado
+    no código de barras arrecadação.
+
+    Tenta vários padrões de layout comuns em faturas brasileiras:
+      - "Vencimento: 22/06/2026"
+      - "VENCIMENTO\\n22/06/2026"
+      - "VENC. 22/06/2026"
+      - "Data de Vencimento 22/06/2026"
+      - "VENCE EM 22/06/2026"
+    Fallback: primeira data futura (ano >= 2024) encontrada no texto.
+    """
+    if not TESSERACT_OK:
+        return ""
+    text = _ocr_text(pil_img)
+    if not text:
+        return ""
+
+    # Padrões em ordem de prioridade — aceita qualquer coisa (até 30 chars)
+    # entre a palavra-chave e a data para lidar com OCR imperfeito
+    _PAT_VENC = [
+        r"Vencimento[\s\S]{0,30}?(\d{2}/\d{2}/\d{4})",
+        r"\bVENC(?:IMENTO)?\b[\s\S]{0,30}?(\d{2}/\d{2}/\d{4})",
+        r"Data\s+(?:de\s+)?Venc(?:imento)?[\s\S]{0,30}?(\d{2}/\d{2}/\d{4})",
+        r"Vence(?:\s+em)?[\s\S]{0,20}?(\d{2}/\d{2}/\d{4})",
+    ]
+    for pat in _PAT_VENC:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            return m.group(1)
+
+    # Fallback: primeira data futura encontrada no texto
+    dates = re.findall(r"\b(\d{2}/\d{2}/20[2-9]\d)\b", text)
+    if dates:
+        return dates[0]
+
+    return ""
+
+
 # ── Parser PIX EMV (QR Code) ──────────────────────────────────────────────────
 
 def _parse_pix_emv(payload: str) -> dict:
@@ -141,11 +182,19 @@ def _extrair_dados_texto(text: str) -> dict:
         if validos:
             result["valor"] = validos[-1].strip()
 
-    # Vencimento: após palavra "Vencimento"
-    m = re.search(r"Vencimento[\s\n:]+(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE)
-    if m:
-        result["vencimento"] = m.group(1)
-    else:
+    # Vencimento: múltiplos padrões de faturas brasileiras
+    _venc_pats = [
+        r"Vencimento[\s\S]{0,30}?(\d{2}/\d{2}/\d{4})",
+        r"\bVENC(?:IMENTO)?\b[\s\S]{0,30}?(\d{2}/\d{2}/\d{4})",
+        r"Data\s+(?:de\s+)?Venc(?:imento)?[\s\S]{0,30}?(\d{2}/\d{2}/\d{4})",
+        r"Vence(?:\s+em)?[\s\S]{0,20}?(\d{2}/\d{2}/\d{4})",
+    ]
+    for _pat in _venc_pats:
+        m = re.search(_pat, text, re.IGNORECASE)
+        if m:
+            result["vencimento"] = m.group(1)
+            break
+    if "vencimento" not in result:
         # Datas com ano >= 2024 (evita pegar datas antigas do documento)
         dates = re.findall(r"\b(\d{2}/\d{2}/20[2-9]\d)\b", text)
         if dates:
@@ -369,6 +418,10 @@ def extract_boleto(pil_img: Image.Image) -> dict:
             if parsed:
                 result.update(parsed)
                 result["codigo"] = digits_only[:44]
+                # Arrecadação (energia, água, etc.) não carrega vencimento no
+                # código de barras → extrai via OCR do texto impresso na fatura
+                if not result.get("vencimento"):
+                    result["vencimento"] = _ocr_vencimento(pil_img)
                 return result
 
     # 2. Fallback OCR — só usa se conseguir dados razoáveis
