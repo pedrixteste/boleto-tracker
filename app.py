@@ -578,7 +578,44 @@ def tela_pendentes():
 
 SECOES_LEMBRETES = ["Pessoal", "RBM", "Vithall", "Anaelena"]
 
+# ── Dados: Lembretes Pessoal ─────────────────────────────────────────────────
+LEMBRETES_PESSOAL = [
+    {"Descrição": "Boletos Viagem 2 - Parcela 03/08",                   "Previsão de vencimento": "01/05/2026", "Situação": "PAGO"},
+    {"Descrição": "Assistencia funeral - Diersmann",                    "Previsão de vencimento": "05/05/2026", "Situação": "PAGO"},
+    {"Descrição": "Parcela de casa - volta pagto em 05/2026",           "Previsão de vencimento": "05/05/2026", "Situação": "COM ANA"},
+    {"Descrição": "Viagem Pedro e Ana final de ano - Leticia 08/15",    "Previsão de vencimento": "07/05/2026", "Situação": "PAGO"},
+    {"Descrição": "IPTU IMBE 2026 05/09",                               "Previsão de vencimento": "08/05/2026", "Situação": "PAGO"},
+    {"Descrição": "Água Rua Taquara Imbé",                              "Previsão de vencimento": "09/05/2026", "Situação": "PAGO"},
+    {"Descrição": "Parcela Karate Gabi",                                "Previsão de vencimento": "10/05/2026", "Situação": "COM ANA"},
+    {"Descrição": "Cuidadora Cleia - VIVI",                             "Previsão de vencimento": "10/05/2026", "Situação": "PAGO"},
+    {"Descrição": "Vigilancia casa Lajeado Itec",                       "Previsão de vencimento": "10/05/2026", "Situação": "PAGO"},
+    {"Descrição": "Jardinheiro",                                        "Previsão de vencimento": "10/05/2026", "Situação": "COM ANA"},
+    {"Descrição": "Uninter Pedro",                                      "Previsão de vencimento": "10/05/2026", "Situação": "COM ANA"},
+    {"Descrição": "Brasrede internet casa",                             "Previsão de vencimento": "10/05/2026", "Situação": "PAGO"},
+    {"Descrição": "Parcela Carro Palio 32/36",                          "Previsão de vencimento": "11/05/2026", "Situação": "PAGO"},
+    {"Descrição": "Seguro Pedro Etios Cartão de Crédito 10x fatura",    "Previsão de vencimento": "15/05/2026", "Situação": "COM ANA"},
+    {"Descrição": "Seguro Rafa Palio Cartão Porto Bank 10x",            "Previsão de vencimento": "15/05/2026", "Situação": "COM ANA"},
+    {"Descrição": "Seguro Rafa Crossfox Cartão Porto Bank 10x",         "Previsão de vencimento": "15/05/2026", "Situação": "COM ANA"},
+    {"Descrição": "Cartão de crédito PF",                               "Previsão de vencimento": "15/05/2026", "Situação": "COM ANA"},
+    {"Descrição": "Limpeza piscina",                                    "Previsão de vencimento": "15/05/2026", "Situação": "COM ANA"},
+    {"Descrição": "Energia eletrica Casa Certel",                       "Previsão de vencimento": "15/05/2026", "Situação": "GRUPO"},
+    {"Descrição": "IPTU Casa - ROBINSON 2026 01/08",                    "Previsão de vencimento": "15/05/2026", "Situação": "GRUPO"},
+    {"Descrição": "Parcelamento Dívida Grall - Rafa parcela 16/36",     "Previsão de vencimento": "18/05/2026", "Situação": "GRUPO"},
+    {"Descrição": "IPTU CASA 2024/2025 - PARCELAS 01/08",               "Previsão de vencimento": "22/05/2026", "Situação": "GRUPO"},
+    {"Descrição": "Fotos Hanna 10k - 1k entrada - 35x257,00",           "Previsão de vencimento": "25/05/2026", "Situação": "COM ANA"},
+    {"Descrição": "Negociação Antiga Stilocar 02/20",                   "Previsão de vencimento": "25/05/2026", "Situação": "GRUPO"},
+    {"Descrição": "Energia eletrica imbé - ceee",                       "Previsão de vencimento": "27/05/2026", "Situação": "GRUPO"},
+    {"Descrição": "Água casa",                                          "Previsão de vencimento": "28/05/2026", "Situação": "GRUPO"},
+    {"Descrição": "Serasa Ana Banco Bradesco Parcelado 19/48",          "Previsão de vencimento": "29/05/2026", "Situação": "GRUPO"},
+    {"Descrição": "Serasa Ana Banco Itau 19/48",                        "Previsão de vencimento": "29/05/2026", "Situação": "GRUPO"},
+    {"Descrição": "Vigilancia casa Imbé Suat",                          "Previsão de vencimento": "30/05/2026", "Situação": "GRUPO"},
+    {"Descrição": "Parcelamento Dívida Stilocar - Rafa PARC 16/19",     "Previsão de vencimento": "30/05/2026", "Situação": "SOLICITADO"},
+]
+
+
 def tela_lembretes():
+    import pandas as pd
+
     st.title("📅 Lembretes de Conta Mensal")
     st.caption("Contas fixas mensais que precisam ser fotografadas e registradas.")
     st.markdown("")
@@ -594,7 +631,23 @@ def tela_lembretes():
                 st.rerun()
 
     st.markdown("---")
-    st.info(f"Seção **{secao}** — em breve.")
+
+    if secao == "Pessoal":
+        df = pd.DataFrame(LEMBRETES_PESSOAL)
+        st.caption(f"{len(df)} contas · {len(df[df['Situação']=='PAGO'])} pagas · "
+                   f"{len(df[df['Situação']!='PAGO'])} pendentes")
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Descrição":              st.column_config.TextColumn(width="large"),
+                "Previsão de vencimento": st.column_config.TextColumn(width="medium"),
+                "Situação":               st.column_config.TextColumn(width="small"),
+            },
+        )
+    else:
+        st.info(f"Seção **{secao}** — em breve.")
 
     st.markdown("")
     if st.button("← Voltar"):
