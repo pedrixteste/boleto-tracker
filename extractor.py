@@ -1,7 +1,7 @@
 import re
 import numpy as np
 from PIL import Image, ImageEnhance
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 # Configuração do Tesseract no Windows
 import os as _os
@@ -85,19 +85,39 @@ def _ocr_text(pil_img: Image.Image, psm: int = 6) -> str:
     return text
 
 
+def _ocr_sem_threshold(pil_img: Image.Image, psm: int = 6) -> str:
+    """OCR sem adaptive threshold — melhor para texto em fundo colorido (ex: caixas verdes)."""
+    if not TESSERACT_OK:
+        return ""
+    # Upscale se pequena
+    w, h = pil_img.size
+    if max(w, h) < 2000:
+        scale = 2000 / max(w, h)
+        pil_img = pil_img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    gray     = pil_img.convert("L")
+    enhanced = ImageEnhance.Contrast(gray).enhance(2.0)
+    config   = f"--psm {psm}"
+    try:
+        return pytesseract.image_to_string(enhanced, lang="por", config=config)
+    except Exception:
+        try:
+            return pytesseract.image_to_string(enhanced, lang="eng", config=config)
+        except Exception:
+            return ""
+
+
 def _ocr_vencimento(pil_img: Image.Image) -> str:
     """
-    Extrai data de vencimento via OCR para faturas de concessionárias
-    (energia, água, gás, telecom) onde o vencimento NÃO está codificado
-    no código de barras arrecadação.
-    Tenta múltiplos modos do Tesseract para lidar com layouts de tabela.
+    Extrai data de vencimento via OCR para faturas de concessionárias.
+    Estratégia em camadas:
+      1. Preprocessing padrão (threshold) — PSM 6, 11, 4
+      2. Sem threshold (caixas coloridas, ex: Certel 2ª página) — PSM 6, 11
+      3. Rotações 90°/270° × preprocessing padrão e sem threshold
+         (fotos tiradas na horizontal)
     """
     if not TESSERACT_OK:
         return ""
 
-    # Padrões em ordem de prioridade.
-    # Janela {0,120} para tabelas multi-coluna (ex: Certel: "VENCIMENTO TOTAL A
-    # PAGAR COMPETÊNCIA\n63.328.095-39 22/06/2026" → ~50 chars entre keyword e data).
     _PAT_VENC = [
         r"Vencimento[\s\S]{0,120}?(\d{2}/\d{2}/\d{4})",
         r"\bVENC(?:IMENTO)?\b[\s\S]{0,120}?(\d{2}/\d{2}/\d{4})",
@@ -106,21 +126,68 @@ def _ocr_vencimento(pil_img: Image.Image) -> str:
     ]
 
     def _buscar(text: str) -> str:
+        today = date.today()
+
+        def _parse_d(d_str: str):
+            try:
+                return datetime.strptime(d_str, "%d/%m/%Y").date()
+            except Exception:
+                return None
+
+        def _best_date(candidates: list) -> str:
+            """Prefere a data futura mais próxima; se todas passadas, a mais recente.
+            Isso resolve tabelas onde "COMPETÊNCIA | VENCIMENTO" faz o padrão
+            capturar a data de competência (passada) em vez do vencimento (futuro).
+            """
+            parsed = [(d, _parse_d(d)) for d in candidates if _parse_d(d)]
+            future = [(d, p) for d, p in parsed if p >= today]
+            if future:
+                return future[0][0]          # primeira data futura (mais próxima)
+            if parsed:
+                parsed.sort(key=lambda x: x[1], reverse=True)
+                return parsed[0][0]          # mais recente (boleto vencido)
+            return candidates[0] if candidates else ""
+
         for pat in _PAT_VENC:
             m = re.search(pat, text, re.IGNORECASE)
             if m:
+                # Busca TODAS as datas no contexto (até 200 chars a partir do match).
+                # Para tabelas tipo "COMPETÊNCIA | VENCIMENTO / 25/05 | 22/06",
+                # o padrão captura a primeira data do bloco (competência) em vez
+                # do vencimento. Com múltiplas datas, aplica a heurística _best_date.
+                window = text[m.start(): min(len(text), m.start() + 200)]
+                all_dates = re.findall(r"(\d{2}/\d{2}/\d{4})", window)
+                if len(all_dates) > 1:
+                    return _best_date(all_dates)
                 return m.group(1)
-        # Fallback: primeira data futura encontrada no texto
-        dates = re.findall(r"(\d{2}/\d{2}/20[2-9]\d)", text)
-        return dates[0] if dates else ""
 
-    # Tenta PSM 6 (bloco uniforme) → PSM 11 (texto esparso) → PSM 4 (coluna única)
-    for psm in (6, 11, 4):
-        text = _ocr_text(pil_img, psm=psm)
-        if text:
-            result = _buscar(text)
+        # Sem keyword — qualquer data 20xx, preferindo futura
+        dates = re.findall(r"(\d{2}/\d{2}/20[2-9]\d)", text)
+        return _best_date(dates) if dates else ""
+
+    def _tentar(img: Image.Image) -> str:
+        # Com threshold
+        for psm in (6, 11, 4):
+            result = _buscar(_ocr_text(img, psm=psm))
             if result:
                 return result
+        # Sem threshold (caixas coloridas)
+        for psm in (6, 11):
+            result = _buscar(_ocr_sem_threshold(img, psm=psm))
+            if result:
+                return result
+        return ""
+
+    # Orientação original
+    result = _tentar(pil_img)
+    if result:
+        return result
+
+    # Rotações 90° e 270° (foto tirada de lado)
+    for angle in (90, 270):
+        result = _tentar(pil_img.rotate(angle, expand=True))
+        if result:
+            return result
 
     return ""
 
@@ -204,7 +271,20 @@ def _extrair_dados_texto(text: str) -> dict:
         # Datas com ano >= 2024 (evita pegar datas antigas do documento)
         dates = re.findall(r"(\d{2}/\d{2}/20[2-9]\d)", text)
         if dates:
-            result["vencimento"] = dates[0]
+            today = date.today()
+            def _pd(d):
+                try:
+                    return datetime.strptime(d, "%d/%m/%Y").date()
+                except Exception:
+                    return None
+            future = [d for d in dates if _pd(d) and _pd(d) >= today]
+            if future:
+                result["vencimento"] = future[0]
+            else:
+                # Todas passadas (boleto vencido): pega a data mais recente
+                dated = [(d, _pd(d)) for d in dates if _pd(d)]
+                dated.sort(key=lambda x: x[1], reverse=True)
+                result["vencimento"] = dated[0][0] if dated else dates[0]
 
     # Beneficiário: linha após "Beneficiário"
     m = re.search(r"Benefici[aá]rio[\s\n:]+(.+)", text, re.IGNORECASE)
@@ -453,6 +533,11 @@ def extract_boleto(pil_img: Image.Image) -> dict:
             if len(digits) > 8:  # mais de R$ 999.999 = suspeito
                 dados.pop("valor", None)
         result.update(dados)
+        # Se ainda sem vencimento (ex: fatura com QR de NF-e, data em caixa
+        # colorida ou imagem rotacionada), tenta OCR dedicado com rotações +
+        # múltiplos PSMs + preprocessing sem threshold.
+        if not result.get("vencimento"):
+            result["vencimento"] = _ocr_vencimento(pil_img)
 
     return result
 
