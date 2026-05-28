@@ -14,7 +14,7 @@ import requests as _requests
 
 import importlib, sheets as _sheets_mod
 importlib.reload(_sheets_mod)   # garante que o módulo não está cacheado
-from sheets import append_row, get_all_rows, update_status, get_config, save_config, ENTIDADES, BANCOS
+from sheets import append_row, get_all_rows, update_status, get_config, save_config, migrar_cabecalhos, ENTIDADES, BANCOS
 
 
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
@@ -133,6 +133,11 @@ def init_state():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+    # Migração única: adiciona colunas novas nas abas existentes
+    if "_cabecalhos_migrados" not in st.session_state and SPREADSHEET_ID:
+        migrar_cabecalhos(SPREADSHEET_ID)
+        st.session_state["_cabecalhos_migrados"] = True
 
 
 # ── Tela 1: Início ────────────────────────────────────────────────────────────

@@ -68,8 +68,20 @@ def _get_or_create_sheet(spreadsheet_id: str, tab_name: str):
     spreadsheet = client.open_by_key(spreadsheet_id)
     try:
         sheet = spreadsheet.worksheet(tab_name)
+        # Verifica se os cabeçalhos novos já existem; adiciona se faltar
+        existing = sheet.row_values(1)
+        missing = [h for h in HEADERS if h not in existing]
+        if missing:
+            next_col = len(existing) + 1
+            for i, header in enumerate(missing):
+                sheet.update_cell(1, next_col + i, header)
+            sheet.format(f"A1:K1", {
+                "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+                "backgroundColor": {"red": 0.082, "green": 0.396, "blue": 0.753},
+            })
+            _aplicar_filtro(spreadsheet, sheet)
     except gspread.WorksheetNotFound:
-        sheet = spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=10)
+        sheet = spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=11)
         sheet.append_row(HEADERS)
         sheet.format("A1:K1", {
             "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
@@ -77,6 +89,31 @@ def _get_or_create_sheet(spreadsheet_id: str, tab_name: str):
         })
         _aplicar_filtro(spreadsheet, sheet)
     return sheet
+
+
+def migrar_cabecalhos(spreadsheet_id: str):
+    """Atualiza cabeçalhos de todas as abas existentes para incluir colunas novas."""
+    try:
+        client = _get_client()
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        for ws in spreadsheet.worksheets():
+            if ws.title.startswith("_"):
+                continue
+            existing = ws.row_values(1)
+            missing = [h for h in HEADERS if h not in existing]
+            if missing:
+                next_col = len(existing) + 1
+                for i, header in enumerate(missing):
+                    ws.update_cell(1, next_col + i, header)
+                ws.format("A1:K1", {
+                    "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+                    "backgroundColor": {"red": 0.082, "green": 0.396, "blue": 0.753},
+                })
+                _aplicar_filtro(spreadsheet, ws)
+        return True
+    except Exception as e:
+        st.error(f"Erro ao migrar cabeçalhos: {e}")
+        return False
 
 
 def get_all_rows(spreadsheet_id: str) -> list:
