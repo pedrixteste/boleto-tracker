@@ -14,7 +14,7 @@ import requests as _requests
 
 import importlib, sheets as _sheets_mod
 importlib.reload(_sheets_mod)   # garante que o módulo não está cacheado
-from sheets import append_row, get_all_rows, update_status, get_config, save_config, migrar_cabecalhos, ENTIDADES, BANCOS
+from sheets import append_row, get_all_rows, update_status, get_config, save_config, migrar_cabecalhos, atualizar_vencidos, ENTIDADES, BANCOS
 
 
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
@@ -134,10 +134,12 @@ def init_state():
         if k not in st.session_state:
             st.session_state[k] = v
 
-    # Migração única: adiciona colunas novas nas abas existentes
-    if "_cabecalhos_migrados" not in st.session_state and SPREADSHEET_ID:
+    # Migração: corrige fórmulas, cabeçalhos e status nas abas existentes
+    # Flag versionada — incrementar quando houver nova migração
+    _MIGRATION_VERSION = "v3"
+    if st.session_state.get("_migrado") != _MIGRATION_VERSION and SPREADSHEET_ID:
         migrar_cabecalhos(SPREADSHEET_ID)
-        st.session_state["_cabecalhos_migrados"] = True
+        st.session_state["_migrado"] = _MIGRATION_VERSION
 
 
 # ── Tela 1: Início ────────────────────────────────────────────────────────────
@@ -522,9 +524,10 @@ def tela_pendentes():
         return
 
     with st.spinner("Carregando..."):
+        atualizar_vencidos(SPREADSHEET_ID)
         rows = get_all_rows(SPREADSHEET_ID)
 
-    pendentes = [r for r in rows if r.get("Status", "").strip() in ("Pendente", "")]
+    pendentes = [r for r in rows if r.get("Status", "").strip() in ("Previsão", "Vencido", "Pendente", "")]
 
     if not pendentes:
         st.success("Nenhum boleto ou cheque pendente!")
@@ -534,10 +537,14 @@ def tela_pendentes():
             st.rerun()
         return
 
-    st.caption(f"{len(pendentes)} item(ns) pendente(s)")
+    vencidos  = [r for r in pendentes if r.get("Status", "").strip() == "Vencido"]
+    previsoes = [r for r in pendentes if r.get("Status", "").strip() != "Vencido"]
+
+    st.caption(f"{len(pendentes)} item(ns) — {len(vencidos)} vencido(s)")
     st.markdown("")
 
-    for row in pendentes:
+    # Vencidos primeiro, depois previsões
+    for row in (vencidos + previsoes):
         beneficiario = row.get("Beneficiário", "") or "Sem nome"
         vencimento   = row.get("Vencimento", "")   or "—"
 

@@ -66,7 +66,7 @@ def _get_pendentes(spreadsheet_id: str) -> list:
             if ws.title.startswith("_"):
                 continue
             for row in ws.get_all_records():
-                if row.get("Status", "").strip() in ("Pendente", ""):
+                if row.get("Status", "").strip() in ("Pendente", "Previsão", "Vencido", ""):
                     row["_tab_name"] = ws.title
                     pendentes.append(row)
         return pendentes
