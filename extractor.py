@@ -106,6 +106,37 @@ def _ocr_sem_threshold(pil_img: Image.Image, psm: int = 6) -> str:
             return ""
 
 
+def _ocr_otsu(pil_img: Image.Image, psm: int = 6) -> str:
+    """OCR com threshold Otsu (global) — melhor que adaptive para texto impresso
+    em fundo branco uniforme (ex: tabela de dados de faturas)."""
+    if not TESSERACT_OK:
+        return ""
+    w, h = pil_img.size
+    if max(w, h) < 2000:
+        scale = 2000 / max(w, h)
+        pil_img = pil_img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    if CV2_OK:
+        img = np.array(pil_img.convert("RGB"))
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        # Blur suave antes do Otsu reduz ruído de foto
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        processed = Image.fromarray(thresh)
+    else:
+        gray = pil_img.convert("L")
+        processed = ImageEnhance.Contrast(gray).enhance(2.5)
+
+    config = f"--psm {psm}"
+    try:
+        return pytesseract.image_to_string(processed, lang="por", config=config)
+    except Exception:
+        try:
+            return pytesseract.image_to_string(processed, lang="eng", config=config)
+        except Exception:
+            return ""
+
+
 def _ocr_vencimento(pil_img: Image.Image) -> str:
     """
     Extrai data de vencimento via OCR para faturas de concessionárias.
@@ -166,12 +197,17 @@ def _ocr_vencimento(pil_img: Image.Image) -> str:
         return _best_date(dates) if dates else ""
 
     def _tentar(img: Image.Image) -> str:
-        # Com threshold
-        for psm in (6, 11, 4):
+        # 1. Threshold adaptativo (padrão) — PSMs variados
+        for psm in (6, 11, 3, 4):
             result = _buscar(_ocr_text(img, psm=psm))
             if result:
                 return result
-        # Sem threshold (caixas coloridas)
+        # 2. Threshold Otsu (global) — melhor para texto impresso em fundo branco
+        for psm in (6, 3, 11):
+            result = _buscar(_ocr_otsu(img, psm=psm))
+            if result:
+                return result
+        # 3. Sem threshold (caixas coloridas)
         for psm in (6, 11):
             result = _buscar(_ocr_sem_threshold(img, psm=psm))
             if result:
