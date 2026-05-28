@@ -70,16 +70,16 @@ def _preprocess(pil_img: Image.Image) -> Image.Image:
     return Image.fromarray(thresh)
 
 
-def _ocr_text(pil_img: Image.Image) -> str:
+def _ocr_text(pil_img: Image.Image, psm: int = 6) -> str:
     if not TESSERACT_OK:
         return ""
     processed = _preprocess(pil_img)
+    config = f"--psm {psm}"
     try:
-        text = pytesseract.image_to_string(processed, lang="por", config="--psm 6")
+        text = pytesseract.image_to_string(processed, lang="por", config=config)
     except Exception:
-        # Pacote 'por' não instalado — tenta inglês como fallback
         try:
-            text = pytesseract.image_to_string(processed, lang="eng", config="--psm 6")
+            text = pytesseract.image_to_string(processed, lang="eng", config=config)
         except Exception:
             return ""
     return text
@@ -90,41 +90,37 @@ def _ocr_vencimento(pil_img: Image.Image) -> str:
     Extrai data de vencimento via OCR para faturas de concessionárias
     (energia, água, gás, telecom) onde o vencimento NÃO está codificado
     no código de barras arrecadação.
-
-    Tenta vários padrões de layout comuns em faturas brasileiras:
-      - "Vencimento: 22/06/2026"
-      - "VENCIMENTO\\n22/06/2026"
-      - "VENC. 22/06/2026"
-      - "Data de Vencimento 22/06/2026"
-      - "VENCE EM 22/06/2026"
-    Fallback: primeira data futura (ano >= 2024) encontrada no texto.
+    Tenta múltiplos modos do Tesseract para lidar com layouts de tabela.
     """
     if not TESSERACT_OK:
         return ""
-    text = _ocr_text(pil_img)
-    if not text:
-        return ""
 
     # Padrões em ordem de prioridade.
-    # Usamos {0,80} para tolerar tabelas multi-coluna onde a palavra-chave
-    # "VENCIMENTO" é cabeçalho de coluna e a data está na linha seguinte,
-    # separada pelas demais colunas (ex: Certel — "VENCIMENTO TOTAL A PAGAR
-    # COMPETÊNCIA\n63.328.095-39 22/06/2026 1.518,46 MAI/2026").
+    # Janela {0,120} para tabelas multi-coluna (ex: Certel: "VENCIMENTO TOTAL A
+    # PAGAR COMPETÊNCIA\n63.328.095-39 22/06/2026" → ~50 chars entre keyword e data).
     _PAT_VENC = [
-        r"Vencimento[\s\S]{0,80}?(\d{2}/\d{2}/\d{4})",
-        r"\bVENC(?:IMENTO)?\b[\s\S]{0,80}?(\d{2}/\d{2}/\d{4})",
-        r"Data\s+(?:de\s+)?Venc(?:imento)?[\s\S]{0,80}?(\d{2}/\d{2}/\d{4})",
-        r"Vence(?:\s+em)?[\s\S]{0,40}?(\d{2}/\d{2}/\d{4})",
+        r"Vencimento[\s\S]{0,120}?(\d{2}/\d{2}/\d{4})",
+        r"\bVENC(?:IMENTO)?\b[\s\S]{0,120}?(\d{2}/\d{2}/\d{4})",
+        r"Data\s+(?:de\s+)?Venc(?:imento)?[\s\S]{0,120}?(\d{2}/\d{2}/\d{4})",
+        r"Vence(?:\s+em)?[\s\S]{0,60}?(\d{2}/\d{2}/\d{4})",
     ]
-    for pat in _PAT_VENC:
-        m = re.search(pat, text, re.IGNORECASE)
-        if m:
-            return m.group(1)
 
-    # Fallback: primeira data futura encontrada no texto
-    dates = re.findall(r"(\d{2}/\d{2}/20[2-9]\d)", text)
-    if dates:
-        return dates[0]
+    def _buscar(text: str) -> str:
+        for pat in _PAT_VENC:
+            m = re.search(pat, text, re.IGNORECASE)
+            if m:
+                return m.group(1)
+        # Fallback: primeira data futura encontrada no texto
+        dates = re.findall(r"(\d{2}/\d{2}/20[2-9]\d)", text)
+        return dates[0] if dates else ""
+
+    # Tenta PSM 6 (bloco uniforme) → PSM 11 (texto esparso) → PSM 4 (coluna única)
+    for psm in (6, 11, 4):
+        text = _ocr_text(pil_img, psm=psm)
+        if text:
+            result = _buscar(text)
+            if result:
+                return result
 
     return ""
 
@@ -194,10 +190,10 @@ def _extrair_dados_texto(text: str) -> dict:
 
     # Vencimento: múltiplos padrões de faturas brasileiras
     _venc_pats = [
-        r"Vencimento[\s\S]{0,80}?(\d{2}/\d{2}/\d{4})",
-        r"\bVENC(?:IMENTO)?\b[\s\S]{0,80}?(\d{2}/\d{2}/\d{4})",
-        r"Data\s+(?:de\s+)?Venc(?:imento)?[\s\S]{0,80}?(\d{2}/\d{2}/\d{4})",
-        r"Vence(?:\s+em)?[\s\S]{0,40}?(\d{2}/\d{2}/\d{4})",
+        r"Vencimento[\s\S]{0,120}?(\d{2}/\d{2}/\d{4})",
+        r"\bVENC(?:IMENTO)?\b[\s\S]{0,120}?(\d{2}/\d{2}/\d{4})",
+        r"Data\s+(?:de\s+)?Venc(?:imento)?[\s\S]{0,120}?(\d{2}/\d{2}/\d{4})",
+        r"Vence(?:\s+em)?[\s\S]{0,60}?(\d{2}/\d{2}/\d{4})",
     ]
     for _pat in _venc_pats:
         m = re.search(_pat, text, re.IGNORECASE)
