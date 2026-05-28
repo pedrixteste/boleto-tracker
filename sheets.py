@@ -132,7 +132,8 @@ def upload_imagem_drive(image_bytes: bytes, filename: str) -> str:
 
     except Exception as e:
         print(f"[upload_imagem_drive] Erro: {e}")
-        return ""
+        # Propaga o erro para que o chamador possa mostrar aviso na tela
+        raise RuntimeError(f"Drive: {e}") from e
 
 
 def _aplicar_filtro(spreadsheet, sheet):
@@ -172,9 +173,10 @@ def _get_or_create_sheet(spreadsheet_id: str, tab_name: str):
             })
             _aplicar_filtro(spreadsheet, sheet)
     except gspread.WorksheetNotFound:
-        sheet = spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=11)
+        sheet = spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=len(HEADERS))
         sheet.append_row(HEADERS)
-        sheet.format("A1:K1", {
+        last_col = chr(ord("A") + len(HEADERS) - 1)  # ex: "M" para 13 colunas
+        sheet.format(f"A1:{last_col}1", {
             "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
             "backgroundColor": {"red": 0.082, "green": 0.396, "blue": 0.753},
         })

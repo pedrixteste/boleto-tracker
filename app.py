@@ -494,10 +494,16 @@ def tela_revisao():
             # Faz upload da foto para o Drive (se houver imagem)
             foto_url = ""
             if imagem:
-                buf = io.BytesIO()
-                imagem.save(buf, format="JPEG", quality=85)
-                nome_arq = f"{re.sub(chr(32), '_', beneficiario[:20])}_{date.today().strftime('%d%m%Y')}.jpg"
-                foto_url = upload_imagem_drive(buf.getvalue(), nome_arq)
+                try:
+                    buf = io.BytesIO()
+                    imagem.save(buf, format="JPEG", quality=85)
+                    nome_arq = f"{re.sub(chr(32), '_', beneficiario[:20])}_{date.today().strftime('%d%m%Y')}.jpg"
+                    foto_url = upload_imagem_drive(buf.getvalue(), nome_arq)
+                except Exception as _drive_err:
+                    st.warning(
+                        f"⚠️ Não foi possível salvar a foto no Drive: {_drive_err}\n\n"
+                        "O boleto será salvo normalmente, mas sem a foto anexada."
+                    )
 
             sucesso = append_row(SPREADSHEET_ID, dados_finais, tab_name, foto_url=foto_url)
 
