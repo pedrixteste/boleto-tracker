@@ -490,6 +490,7 @@ def tela_revisao():
             "observacoes": observacoes,
         }
 
+        drive_error = None
         with st.spinner(f"Salvando em '{tab_name}'..."):
             # Faz upload da foto para o Drive (se houver imagem)
             foto_url = ""
@@ -500,14 +501,15 @@ def tela_revisao():
                     nome_arq = f"{re.sub(chr(32), '_', beneficiario[:20])}_{date.today().strftime('%d%m%Y')}.jpg"
                     foto_url = upload_imagem_drive(buf.getvalue(), nome_arq)
                 except Exception as _drive_err:
-                    st.warning(
-                        f"⚠️ Não foi possível salvar a foto no Drive: {_drive_err}\n\n"
-                        "O boleto será salvo normalmente, mas sem a foto anexada."
-                    )
+                    drive_error = str(_drive_err)
 
             sucesso = append_row(SPREADSHEET_ID, dados_finais, tab_name, foto_url=foto_url)
 
         if sucesso:
+            if drive_error:
+                # Guarda o erro para mostrar na tela de confirmação
+                # (st.warning() dentro do spinner some antes de renderizar)
+                st.session_state["_drive_warning"] = drive_error
             st.session_state.tela   = "confirmacao"
             st.session_state.dados  = {}
             st.session_state.imagem = None
@@ -520,7 +522,18 @@ def tela_confirmacao():
     tab_name = f"{st.session_state.entidade} - {st.session_state.banco}"
     st.title("✅ Salvo!")
     st.success(f"Dados salvos na aba **{tab_name}** com sucesso.")
-    st.balloons()
+
+    # Mostra erro de Drive (se o upload da foto falhou)
+    if "_drive_warning" in st.session_state:
+        warn = st.session_state.pop("_drive_warning")
+        st.warning(
+            f"⚠️ **A foto não foi salva** — erro no Google Drive:\n\n"
+            f"```\n{warn}\n```\n\n"
+            "Provável causa: a **Google Drive API** não está ativada no Google Cloud. "
+            "[Clique aqui para ativar](https://console.cloud.google.com/apis/library/drive.googleapis.com)"
+        )
+    else:
+        st.balloons()
 
     st.markdown("")
     if st.button("➕ Novo documento", type="primary"):
