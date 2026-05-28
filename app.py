@@ -502,7 +502,15 @@ def tela_confirmacao():
 # ── Tela 6: Pendentes ─────────────────────────────────────────────────────────
 
 def tela_pendentes():
-    st.title("📋 Pendentes")
+    col_titulo, col_voltar = st.columns([4, 1])
+    with col_titulo:
+        st.title("📋 Pendentes")
+    with col_voltar:
+        st.markdown("<div style='padding-top:18px'>", unsafe_allow_html=True)
+        if st.button("← Voltar", key="voltar_top"):
+            st.session_state.tela = "inicio"
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
     if not SPREADSHEET_ID:
         st.error("ID da planilha não configurado.")
@@ -625,7 +633,16 @@ LEMBRETES_PESSOAL = [
 def tela_lembretes():
     import pandas as pd
 
-    st.title("📅 Lembretes de Conta Mensal")
+    col_titulo, col_voltar = st.columns([4, 1])
+    with col_titulo:
+        st.title("📅 Lembretes de Conta Mensal")
+    with col_voltar:
+        st.markdown("<div style='padding-top:18px'>", unsafe_allow_html=True)
+        if st.button("← Voltar", key="voltar_lembretes_top"):
+            st.session_state.tela = "inicio"
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
     st.caption("Contas fixas mensais que precisam ser fotografadas e registradas.")
     st.markdown("")
 
