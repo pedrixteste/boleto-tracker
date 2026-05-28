@@ -136,7 +136,7 @@ def init_state():
 
     # Migração: corrige fórmulas, cabeçalhos e status nas abas existentes
     # Flag versionada — incrementar quando houver nova migração
-    _MIGRATION_VERSION = "v3"
+    _MIGRATION_VERSION = "v4"
     if st.session_state.get("_migrado") != _MIGRATION_VERSION and SPREADSHEET_ID:
         migrar_cabecalhos(SPREADSHEET_ID)
         st.session_state["_migrado"] = _MIGRATION_VERSION

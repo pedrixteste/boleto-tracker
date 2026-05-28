@@ -68,6 +68,9 @@ def _get_or_create_sheet(spreadsheet_id: str, tab_name: str):
     spreadsheet = client.open_by_key(spreadsheet_id)
     try:
         sheet = spreadsheet.worksheet(tab_name)
+        # Expande a grade se necessário
+        if sheet.col_count < len(HEADERS):
+            sheet.resize(rows=sheet.row_count, cols=len(HEADERS))
         # Verifica se os cabeçalhos novos já existem; adiciona se faltar
         existing = sheet.row_values(1)
         missing = [h for h in HEADERS if h not in existing]
@@ -108,7 +111,11 @@ def migrar_cabecalhos(spreadsheet_id: str):
             if ws.title.startswith("_"):
                 continue
 
-            # ── 1. Cabeçalhos ────────────────────────────────────────────────
+            # ── 1. Expande a grade se necessário (ex: criada com 10 cols) ────
+            if ws.col_count < len(HEADERS):
+                ws.resize(rows=ws.row_count, cols=len(HEADERS))
+
+            # ── 2. Cabeçalhos ────────────────────────────────────────────────
             existing_headers = ws.row_values(1)
             missing = [h for h in HEADERS if h not in existing_headers]
             if missing:
