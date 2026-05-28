@@ -145,7 +145,7 @@ def init_state():
 # ── Tela 1: Início ────────────────────────────────────────────────────────────
 
 def tela_inicio():
-    st.title("📄 Boletos & Cheques")
+    st.title("📄 Controle Financeiro")
     st.markdown("**O que você quer registrar?**")
     st.markdown("")
 
@@ -160,6 +160,11 @@ def tela_inicio():
             st.session_state.tipo = "Cheque"
             st.session_state.tela = "conta"
             st.rerun()
+
+    if st.button("💸 PIX", use_container_width=True):
+        st.session_state.tipo = "PIX"
+        st.session_state.tela = "conta"
+        st.rerun()
 
     st.markdown("")
     if st.button("📋 Ver pendentes", use_container_width=True):
@@ -191,7 +196,8 @@ def tela_inicio():
 
 def tela_conta():
     tipo = st.session_state.tipo
-    st.title(f"{'🧾' if tipo == 'Boleto' else '📝'} {tipo}")
+    emoji = {"Boleto": "🧾", "Cheque": "📝", "PIX": "💸"}.get(tipo, "📄")
+    st.title(f"{emoji} {tipo}")
     st.markdown("**Para qual conta é esse documento?**")
     st.markdown("")
 
@@ -219,7 +225,7 @@ def tela_conta():
         if st.button("Continuar →", type="primary", use_container_width=True):
             st.session_state.entidade = entidade
             st.session_state.banco    = banco
-            st.session_state.tela     = "captura"
+            st.session_state.tela     = "pix" if st.session_state.tipo == "PIX" else "captura"
             st.rerun()
 
 
@@ -822,6 +828,79 @@ _"Notificações de Boletos Pendentes"_ → botão **Run workflow**.
         st.rerun()
 
 
+# ── Tela PIX ─────────────────────────────────────────────────────────────────
+
+def tela_pix():
+    entidade = st.session_state.entidade
+    banco    = st.session_state.banco
+    tab_name = f"{entidade} - {banco}"
+
+    col_titulo, col_voltar = st.columns([4, 1])
+    with col_titulo:
+        st.title("💸 Registrar PIX")
+    with col_voltar:
+        st.markdown("<div style='padding-top:18px'>", unsafe_allow_html=True)
+        if st.button("← Voltar", key="voltar_pix_top"):
+            st.session_state.tela = "conta"
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.caption(f"Conta: **{tab_name}**")
+    st.markdown("")
+
+    chave = st.text_input(
+        "🔑 Chave PIX",
+        placeholder="CPF, e-mail, telefone, chave aleatória...",
+    )
+
+    beneficiario = st.text_input(
+        "👤 Beneficiário",
+        placeholder="Nome da pessoa ou empresa",
+    )
+
+    valor = st.text_input(
+        "💰 Valor (R$)",
+        placeholder="Ex: 150,00  —  opcional",
+    )
+
+    data_pag = st.date_input(
+        "📅 Data para pagar",
+        value=date.today(),
+        format="DD/MM/YYYY",
+    )
+
+    observacoes = st.text_area(
+        "📝 Observações",
+        placeholder="Opcional — ex: parcela 2/6, referente a...",
+        height=80,
+    )
+
+    st.markdown("")
+    if st.button("💾 Salvar PIX", type="primary", use_container_width=True):
+        if not chave.strip():
+            st.error("Informe a chave PIX.")
+            return
+        if not beneficiario.strip():
+            st.error("Informe o beneficiário.")
+            return
+
+        dados = {
+            "tipo":         "PIX",
+            "beneficiario": beneficiario.strip(),
+            "valor":        valor.strip(),
+            "vencimento":   data_pag.strftime("%d/%m/%Y"),
+            "codigo":       chave.strip(),
+            "observacoes":  observacoes.strip(),
+        }
+
+        with st.spinner("Salvando..."):
+            ok = append_row(SPREADSHEET_ID, dados, tab_name)
+
+        if ok:
+            st.session_state.tela = "confirmacao"
+            st.rerun()
+
+
 # ── Roteador ──────────────────────────────────────────────────────────────────
 
 init_state()
@@ -835,6 +914,7 @@ telas = {
     "pendentes":    tela_pendentes,
     "lembretes":    tela_lembretes,
     "config":       tela_config,
+    "pix":          tela_pix,
 }
 
 telas[st.session_state.tela]()
