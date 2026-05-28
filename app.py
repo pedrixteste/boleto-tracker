@@ -1,6 +1,6 @@
 import streamlit as st
 from PIL import Image
-from datetime import date
+from datetime import date, datetime
 import io
 import re
 
@@ -570,7 +570,6 @@ def tela_pendentes():
         cor         = "#FFF8E1"
         emoji_prazo = "🟡"
         try:
-            from datetime import datetime
             venc_date = datetime.strptime(vencimento, "%d/%m/%Y").date()
             dias = (venc_date - date.today()).days
             if dias < 0:
@@ -835,12 +834,17 @@ def tela_pix():
     banco    = st.session_state.banco
     tab_name = f"{entidade} - {banco}"
 
+    # Inicializa lista de datas ao entrar na tela
+    if "pix_datas" not in st.session_state:
+        st.session_state.pix_datas = []
+
     col_titulo, col_voltar = st.columns([4, 1])
     with col_titulo:
         st.title("💸 Registrar PIX")
     with col_voltar:
         st.markdown("<div style='padding-top:18px'>", unsafe_allow_html=True)
         if st.button("← Voltar", key="voltar_pix_top"):
+            st.session_state.pix_datas = []
             st.session_state.tela = "conta"
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
@@ -863,20 +867,61 @@ def tela_pix():
         placeholder="Ex: 150,00  —  opcional",
     )
 
-    data_pag = st.date_input(
-        "📅 Data para pagar",
-        value=date.today(),
-        format="DD/MM/YYYY",
-    )
-
     observacoes = st.text_area(
         "📝 Observações",
-        placeholder="Opcional — ex: parcela 2/6, referente a...",
+        placeholder="Opcional — ex: referente a...",
         height=80,
     )
 
-    st.markdown("")
-    if st.button("💾 Salvar PIX", type="primary", use_container_width=True):
+    # ── Datas de pagamento ────────────────────────────────────────────────────
+    st.markdown("**📅 Datas para pagar**")
+    st.caption("Adicione uma ou várias datas para cadastrar os próximos pagamentos de uma vez.")
+
+    col_data, col_add = st.columns([3, 1])
+    with col_data:
+        nova_data = st.date_input(
+            "Data",
+            value=date.today(),
+            format="DD/MM/YYYY",
+            label_visibility="collapsed",
+        )
+    with col_add:
+        st.markdown("<div style='padding-top:4px'>", unsafe_allow_html=True)
+        if st.button("➕ Adicionar", use_container_width=True):
+            data_str = nova_data.strftime("%d/%m/%Y")
+            if data_str not in st.session_state.pix_datas:
+                st.session_state.pix_datas.append(data_str)
+                st.session_state.pix_datas.sort(
+                    key=lambda d: datetime.strptime(d, "%d/%m/%Y")
+                )
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Lista de datas adicionadas
+    if st.session_state.pix_datas:
+        st.markdown("")
+        for i, d in enumerate(list(st.session_state.pix_datas)):
+            col_d, col_rm = st.columns([4, 1])
+            with col_d:
+                st.markdown(
+                    f"<div style='background:#E8F5E9;padding:8px 12px;border-radius:8px;"
+                    f"font-size:0.95rem'>📅 {d}</div>",
+                    unsafe_allow_html=True,
+                )
+            with col_rm:
+                if st.button("✕", key=f"rm_data_{i}", use_container_width=True):
+                    st.session_state.pix_datas.pop(i)
+                    st.rerun()
+        st.markdown("")
+    else:
+        st.info("Nenhuma data adicionada. Clique em ➕ para adicionar.")
+        st.markdown("")
+
+    # ── Salvar ────────────────────────────────────────────────────────────────
+    n = len(st.session_state.pix_datas)
+    label_btn = f"💾 Salvar {n} pagamento(s)" if n > 0 else "💾 Salvar PIX"
+
+    if st.button(label_btn, type="primary", use_container_width=True, disabled=(n == 0)):
         if not chave.strip():
             st.error("Informe a chave PIX.")
             return
@@ -884,21 +929,26 @@ def tela_pix():
             st.error("Informe o beneficiário.")
             return
 
-        dados = {
-            "tipo":         "PIX",
-            "beneficiario": beneficiario.strip(),
-            "valor":        valor.strip(),
-            "vencimento":   data_pag.strftime("%d/%m/%Y"),
-            "codigo":       chave.strip(),
-            "observacoes":  observacoes.strip(),
-        }
+        with st.spinner(f"Salvando {n} pagamento(s)..."):
+            erros = 0
+            for data_str in st.session_state.pix_datas:
+                dados = {
+                    "tipo":         "PIX",
+                    "beneficiario": beneficiario.strip(),
+                    "valor":        valor.strip(),
+                    "vencimento":   data_str,
+                    "codigo":       chave.strip(),
+                    "observacoes":  observacoes.strip(),
+                }
+                if not append_row(SPREADSHEET_ID, dados, tab_name):
+                    erros += 1
 
-        with st.spinner("Salvando..."):
-            ok = append_row(SPREADSHEET_ID, dados, tab_name)
-
-        if ok:
+        if erros == 0:
+            st.session_state.pix_datas = []
             st.session_state.tela = "confirmacao"
             st.rerun()
+        else:
+            st.error(f"{erros} pagamento(s) não foram salvos. Tente novamente.")
 
 
 # ── Roteador ──────────────────────────────────────────────────────────────────
