@@ -526,8 +526,17 @@ def tela_pendentes():
 
     for row in pendentes:
         beneficiario = row.get("Beneficiário", "") or "Sem nome"
-        valor        = row.get("Valor (R$)", "")   or "—"
         vencimento   = row.get("Vencimento", "")   or "—"
+
+        # Formata o valor: se Google Sheets devolveu número (ex: 33398 em vez de 333,98)
+        # converte para formato brasileiro com 2 casas decimais
+        _v = row.get("Valor (R$)", "")
+        if isinstance(_v, float):
+            valor = f"{_v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        elif isinstance(_v, int) and _v > 0:
+            valor = f"{_v / 100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        else:
+            valor = str(_v).strip() if _v else "—"
         tipo         = row.get("Tipo", "")
         tab_name     = row.get("_tab_name", "")
         row_idx      = row["_row_index"]

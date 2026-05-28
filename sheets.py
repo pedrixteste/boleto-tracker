@@ -117,11 +117,16 @@ def append_row(spreadsheet_id: str, data: dict, tab_name: str) -> bool:
         next_row = len(sheet.get_all_values()) + 1
         dias_formula = f'=SE(E{next_row}="";"";VALOR(TEXTO(E{next_row};"DD/MM/AAAA"))-HOJE())'
 
+        # Prefixo "'" força Google Sheets a tratar o valor como texto,
+        # evitando que "333,98" seja interpretado como 33.398 (formato americano).
+        valor_raw = data.get("valor", "")
+        valor_cell = f"'{valor_raw}" if valor_raw else ""
+
         row = [
             today,
             data.get("tipo", ""),
             data.get("beneficiario", ""),
-            data.get("valor", ""),
+            valor_cell,
             data.get("vencimento", ""),
             dias_formula,
             "Pendente",
