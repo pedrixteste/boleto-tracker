@@ -16,7 +16,7 @@ import importlib, sheets as _sheets_mod
 importlib.reload(_sheets_mod)   # garante que o módulo não está cacheado
 from sheets import (append_row, get_all_rows, update_status, update_comprovante,
                     get_config, save_config, migrar_cabecalhos, atualizar_vencidos,
-                    upload_imagem_drive, ENTIDADES, BANCOS)
+                    carregar_pendentes, upload_imagem_drive, ENTIDADES, BANCOS)
 
 
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
@@ -559,8 +559,7 @@ def tela_pendentes():
         return
 
     with st.spinner("Carregando..."):
-        atualizar_vencidos(SPREADSHEET_ID)
-        rows = get_all_rows(SPREADSHEET_ID)
+        rows = carregar_pendentes(SPREADSHEET_ID)
 
     pendentes = [r for r in rows if r.get("Status", "").strip() in ("Previsão", "Vencido", "Pendente", "")]
 

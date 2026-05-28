@@ -269,49 +269,56 @@ def migrar_cabecalhos(spreadsheet_id: str):
 
 
 def atualizar_vencidos(spreadsheet_id: str):
-    """Marca como 'Vencido' boletos com data passada e status 'Previsão'."""
+    """Compat: mantido para não quebrar imports existentes. Use carregar_pendentes()."""
+    carregar_pendentes(spreadsheet_id)
+
+
+def get_all_rows(spreadsheet_id: str) -> list:
+    """Compat: mantido para não quebrar imports existentes. Use carregar_pendentes()."""
+    return carregar_pendentes(spreadsheet_id)
+
+
+def carregar_pendentes(spreadsheet_id: str) -> list:
+    """
+    Lê todas as abas, atualiza status 'Vencido' se necessário e retorna
+    todos os registros — em UMA ÚNICA passagem pela planilha.
+
+    Substitui a dupla chamada atualizar_vencidos() + get_all_rows() que
+    dobrava as requisições à Sheets API e causava erro 429 (quota exceeded).
+    """
     try:
         client = _get_client()
         spreadsheet = client.open_by_key(spreadsheet_id)
         today = date.today()
+        all_rows = []
+
         for ws in spreadsheet.worksheets():
             if ws.title.startswith("_"):
                 continue
+
             records = ws.get_all_records()
             updates = []
-            for i, row in enumerate(records):
-                if row.get("Status", "").strip() != "Previsão":
-                    continue
-                venc = row.get("Vencimento", "").strip()
-                if not venc:
-                    continue
-                try:
-                    if datetime.strptime(venc, "%d/%m/%Y").date() < today:
-                        updates.append({"range": f"G{i + 2}", "values": [["Vencido"]]})
-                except Exception:
-                    pass
-            if updates:
-                ws.batch_update(updates)
-        return True
-    except Exception as e:
-        st.error(f"Erro ao atualizar vencidos: {e}")
-        return False
 
-
-def get_all_rows(spreadsheet_id: str) -> list:
-    """Retorna linhas de TODAS as abas de boletos (ignora abas internas que começam com _)."""
-    try:
-        client = _get_client()
-        spreadsheet = client.open_by_key(spreadsheet_id)
-        all_rows = []
-        for ws in spreadsheet.worksheets():
-            if ws.title.startswith("_"):
-                continue   # pula _Config e outras abas internas
-            records = ws.get_all_records()
             for i, row in enumerate(records):
                 row["_tab_name"]  = ws.title
                 row["_row_index"] = i + 2
+
+                # Atualiza vencidos em memória e prepara batch write
+                if row.get("Status", "").strip() == "Previsão":
+                    venc = row.get("Vencimento", "").strip()
+                    if venc:
+                        try:
+                            if datetime.strptime(venc, "%d/%m/%Y").date() < today:
+                                row["Status"] = "Vencido"
+                                updates.append({"range": f"G{i + 2}", "values": [["Vencido"]]})
+                        except Exception:
+                            pass
+
+            if updates:
+                ws.batch_update(updates)
+
             all_rows.extend(records)
+
         return all_rows
     except Exception as e:
         st.error(f"Erro ao carregar planilha: {e}")
