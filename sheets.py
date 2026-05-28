@@ -153,25 +153,17 @@ def _aplicar_filtro(spreadsheet, sheet):
 
 
 def _get_or_create_sheet(spreadsheet_id: str, tab_name: str):
-    """Abre ou cria uma aba com o nome dado, com headers e formatação."""
+    """Abre ou cria uma aba com o nome dado, com headers e formatação.
+    Para abas existentes, apenas abre — cabeçalhos são gerenciados pela migração.
+    """
     client = _get_client()
     spreadsheet = client.open_by_key(spreadsheet_id)
     try:
         sheet = spreadsheet.worksheet(tab_name)
+        # Só expande colunas se necessário (col_count vem dos metadados, sem leitura extra)
         if sheet.col_count < len(HEADERS):
             sheet.resize(rows=sheet.row_count, cols=len(HEADERS))
-        # Verifica se os cabeçalhos novos já existem; adiciona se faltar
-        existing = sheet.row_values(1)
-        missing = [h for h in HEADERS if h not in existing]
-        if missing:
-            next_col = len(existing) + 1
-            for i, header in enumerate(missing):
-                sheet.update_cell(1, next_col + i, header)
-            sheet.format(f"A1:K1", {
-                "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
-                "backgroundColor": {"red": 0.082, "green": 0.396, "blue": 0.753},
-            })
-            _aplicar_filtro(spreadsheet, sheet)
+        return sheet
     except gspread.WorksheetNotFound:
         sheet = spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=len(HEADERS))
         sheet.append_row(HEADERS)
@@ -181,17 +173,27 @@ def _get_or_create_sheet(spreadsheet_id: str, tab_name: str):
             "backgroundColor": {"red": 0.082, "green": 0.396, "blue": 0.753},
         })
         _aplicar_filtro(spreadsheet, sheet)
+        return sheet
     return sheet
 
 
-def migrar_cabecalhos(spreadsheet_id: str):
+_MIGRATION_VERSION = "v5"
+_MIGRATION_KEY     = "_migration_version"
+
+
+def migrar_cabecalhos(spreadsheet_id: str) -> bool:
     """
-    Migração completa das abas existentes:
-    - Adiciona colunas J/K (Mês Cadastro / Mês Vencimento) se faltarem
-    - Corrige fórmula de Dias p/ Vencer (#VALUE! → fórmula com DATA())
-    - Atualiza fórmulas de Mês nas linhas existentes
-    - Muda status: "Pendente" com data futura → "Previsão", com data passada → "Vencido"
+    Migração completa das abas existentes.
+    Persiste a versão na aba _Config para não re-executar a cada reinício do servidor.
     """
+    # ── Verifica se já foi migrado (lê _Config — 1 chamada apenas) ────────────
+    try:
+        config_atual = get_config(spreadsheet_id)
+        if config_atual.get(_MIGRATION_KEY) == _MIGRATION_VERSION:
+            return True   # já migrado — sai sem fazer nenhuma chamada pesada
+    except Exception:
+        pass
+
     try:
         client = _get_client()
         spreadsheet = client.open_by_key(spreadsheet_id)
@@ -261,6 +263,25 @@ def migrar_cabecalhos(spreadsheet_id: str):
 
             if updates:
                 ws.batch_update(updates, value_input_option="USER_ENTERED")
+
+        # ── Persiste versão de migração no _Config ────────────────────────────
+        try:
+            try:
+                cfg_ws = spreadsheet.worksheet(CONFIG_TAB)
+            except gspread.WorksheetNotFound:
+                cfg_ws = spreadsheet.add_worksheet(title=CONFIG_TAB, rows=20, cols=2)
+                cfg_ws.append_row(["Chave", "Valor"])
+
+            # Atualiza linha existente ou adiciona nova
+            cfg_vals = cfg_ws.get_all_values()
+            for i, row in enumerate(cfg_vals):
+                if row and row[0].strip() == _MIGRATION_KEY:
+                    cfg_ws.update_cell(i + 1, 2, _MIGRATION_VERSION)
+                    break
+            else:
+                cfg_ws.append_row([_MIGRATION_KEY, _MIGRATION_VERSION])
+        except Exception:
+            pass   # não bloqueia se _Config falhar
 
         return True
     except Exception as e:
