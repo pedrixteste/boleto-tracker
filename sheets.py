@@ -15,7 +15,7 @@ HEADERS = [
 ]
 
 # Entidades e bancos disponíveis
-ENTIDADES  = ["VITHALL", "RBM", "PESSOAL"]
+ENTIDADES  = ["VITHALL", "RBM", "PESSOAL", "Anaelena", "Cleia"]
 BANCOS     = ["Pagbank", "Banrisul", "Nubank", "Caixa", "Simples"]
 
 # Aba de configuração (oculta — começa com _)
