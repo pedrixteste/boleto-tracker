@@ -2,6 +2,8 @@ import gspread
 from datetime import date, datetime
 import streamlit as st
 import json
+import io
+import re
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -13,7 +15,13 @@ HEADERS = [
     "Valor (R$)", "Vencimento", "Dias p/ Vencer",
     "Status", "Código/Número", "Observações",
     "Mês Cadastro", "Mês Vencimento",
+    "Foto", "Comprovante",
 ]
+
+# Índices das colunas especiais (1-based para gspread)
+COL_STATUS      = 7   # G
+COL_FOTO        = 12  # L
+COL_COMPROVANTE = 13  # M
 
 # Entidades e bancos disponíveis
 ENTIDADES  = ["VITHALL", "RBM", "PESSOAL", "Anaelena", "Cleia"]
@@ -23,27 +31,108 @@ BANCOS     = ["Pagbank", "Banrisul", "Nubank", "Caixa", "Simples"]
 CONFIG_TAB = "_Config"
 
 
-def _get_client():
+def _get_credentials_info() -> dict:
+    """Retorna o dict de credenciais do service account."""
     info = None
     try:
         raw = st.secrets["gcp_service_account"]
-        # st.secrets pode retornar string (secrets.toml) ou dict (Streamlit Cloud)
         if isinstance(raw, str):
             info = json.loads(raw)
         else:
-            # AttrDict → dict normal (json round-trip para converter objetos aninhados)
             info = json.loads(json.dumps(dict(raw)))
     except Exception:
         pass
-
     if info is None:
         try:
             with open("credentials.json") as f:
                 info = json.load(f)
         except FileNotFoundError:
             raise RuntimeError("Credenciais Google não encontradas.")
+    return info
 
-    return gspread.service_account_from_dict(info, scopes=SCOPES)
+
+def _get_client():
+    return gspread.service_account_from_dict(_get_credentials_info(), scopes=SCOPES)
+
+
+# ── Google Drive ──────────────────────────────────────────────────────────────
+
+_DRIVE_FOLDER_ID: str | None = None
+
+
+def _get_drive_service():
+    from google.oauth2.service_account import Credentials
+    from googleapiclient.discovery import build
+    creds = Credentials.from_service_account_info(_get_credentials_info(), scopes=SCOPES)
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+def _get_drive_folder(service) -> str:
+    """Cria (ou reutiliza) a pasta 'Boleto Tracker' no Drive do service account."""
+    global _DRIVE_FOLDER_ID
+    if _DRIVE_FOLDER_ID:
+        return _DRIVE_FOLDER_ID
+    res = service.files().list(
+        q="name='Boleto Tracker' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+        fields="files(id)",
+        spaces="drive",
+    ).execute()
+    if res.get("files"):
+        _DRIVE_FOLDER_ID = res["files"][0]["id"]
+    else:
+        folder = service.files().create(
+            body={"name": "Boleto Tracker", "mimeType": "application/vnd.google-apps.folder"},
+            fields="id",
+        ).execute()
+        _DRIVE_FOLDER_ID = folder["id"]
+    return _DRIVE_FOLDER_ID
+
+
+def upload_imagem_drive(image_bytes: bytes, filename: str) -> str:
+    """
+    Faz upload da imagem para o Google Drive (pasta 'Boleto Tracker'),
+    torna pública e retorna o link de visualização.
+    Comprime para JPEG 1200px / qualidade 75 antes de enviar.
+    """
+    try:
+        from PIL import Image as _PILImage
+        from googleapiclient.http import MediaIoBaseUpload
+
+        # Comprime imagem
+        img = _PILImage.open(io.BytesIO(image_bytes))
+        if img.width > 1200:
+            ratio = 1200 / img.width
+            img = img.resize((1200, int(img.height * ratio)), _PILImage.LANCZOS)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=75)
+        compressed = buf.getvalue()
+
+        # Sanitiza nome do arquivo
+        safe_name = re.sub(r"[^\w\-.]", "_", filename)
+
+        service   = _get_drive_service()
+        folder_id = _get_drive_folder(service)
+
+        media = MediaIoBaseUpload(io.BytesIO(compressed), mimetype="image/jpeg", resumable=False)
+        file  = service.files().create(
+            body={"name": safe_name, "parents": [folder_id]},
+            media_body=media,
+            fields="id",
+        ).execute()
+
+        # Torna público (qualquer pessoa com link pode ver)
+        service.permissions().create(
+            fileId=file["id"],
+            body={"type": "anyone", "role": "reader"},
+        ).execute()
+
+        return f"https://drive.google.com/file/d/{file['id']}/view"
+
+    except Exception as e:
+        print(f"[upload_imagem_drive] Erro: {e}")
+        return ""
 
 
 def _aplicar_filtro(spreadsheet, sheet):
@@ -68,7 +157,6 @@ def _get_or_create_sheet(spreadsheet_id: str, tab_name: str):
     spreadsheet = client.open_by_key(spreadsheet_id)
     try:
         sheet = spreadsheet.worksheet(tab_name)
-        # Expande a grade se necessário
         if sheet.col_count < len(HEADERS):
             sheet.resize(rows=sheet.row_count, cols=len(HEADERS))
         # Verifica se os cabeçalhos novos já existem; adiciona se faltar
@@ -111,7 +199,7 @@ def migrar_cabecalhos(spreadsheet_id: str):
             if ws.title.startswith("_"):
                 continue
 
-            # ── 1. Expande a grade se necessário (ex: criada com 10 cols) ────
+            # ── 1. Expande a grade se necessário ─────────────────────────────
             if ws.col_count < len(HEADERS):
                 ws.resize(rows=ws.row_count, cols=len(HEADERS))
 
@@ -239,7 +327,18 @@ def update_status(spreadsheet_id: str, tab_name: str, row_index: int, status: st
         return False
 
 
-def append_row(spreadsheet_id: str, data: dict, tab_name: str) -> bool:
+def update_comprovante(spreadsheet_id: str, tab_name: str, row_index: int, url: str) -> bool:
+    """Salva o link do comprovante na coluna M de uma linha."""
+    try:
+        sheet = _get_or_create_sheet(spreadsheet_id, tab_name)
+        sheet.update_cell(row_index, COL_COMPROVANTE, url)
+        return True
+    except Exception as e:
+        st.error(f"Erro ao salvar comprovante: {e}")
+        return False
+
+
+def append_row(spreadsheet_id: str, data: dict, tab_name: str, foto_url: str = "") -> bool:
     """Adiciona uma linha na aba correta. Retorna True se sucesso."""
     try:
         sheet = _get_or_create_sheet(spreadsheet_id, tab_name)
@@ -266,6 +365,8 @@ def append_row(spreadsheet_id: str, data: dict, tab_name: str) -> bool:
             data.get("observacoes", ""),
             mes_cad_formula,
             mes_venc_formula,
+            foto_url,
+            "",   # Comprovante — preenchido depois ao marcar como Pago
         ]
         sheet.append_row(row, value_input_option="USER_ENTERED")
         return True

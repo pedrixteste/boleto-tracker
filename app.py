@@ -14,7 +14,9 @@ import requests as _requests
 
 import importlib, sheets as _sheets_mod
 importlib.reload(_sheets_mod)   # garante que o módulo não está cacheado
-from sheets import append_row, get_all_rows, update_status, get_config, save_config, migrar_cabecalhos, atualizar_vencidos, ENTIDADES, BANCOS
+from sheets import (append_row, get_all_rows, update_status, update_comprovante,
+                    get_config, save_config, migrar_cabecalhos, atualizar_vencidos,
+                    upload_imagem_drive, ENTIDADES, BANCOS)
 
 
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
@@ -136,7 +138,7 @@ def init_state():
 
     # Migração: corrige fórmulas, cabeçalhos e status nas abas existentes
     # Flag versionada — incrementar quando houver nova migração
-    _MIGRATION_VERSION = "v4"
+    _MIGRATION_VERSION = "v5"
     if st.session_state.get("_migrado") != _MIGRATION_VERSION and SPREADSHEET_ID:
         migrar_cabecalhos(SPREADSHEET_ID)
         st.session_state["_migrado"] = _MIGRATION_VERSION
@@ -489,7 +491,15 @@ def tela_revisao():
         }
 
         with st.spinner(f"Salvando em '{tab_name}'..."):
-            sucesso = append_row(SPREADSHEET_ID, dados_finais, tab_name)
+            # Faz upload da foto para o Drive (se houver imagem)
+            foto_url = ""
+            if imagem:
+                buf = io.BytesIO()
+                imagem.save(buf, format="JPEG", quality=85)
+                nome_arq = f"{re.sub(chr(32), '_', beneficiario[:20])}_{date.today().strftime('%d%m%Y')}.jpg"
+                foto_url = upload_imagem_drive(buf.getvalue(), nome_arq)
+
+            sucesso = append_row(SPREADSHEET_ID, dados_finais, tab_name, foto_url=foto_url)
 
         if sucesso:
             st.session_state.tela   = "confirmacao"
@@ -553,9 +563,13 @@ def tela_pendentes():
     for row in (vencidos + previsoes):
         beneficiario = row.get("Beneficiário", "") or "Sem nome"
         vencimento   = row.get("Vencimento", "")   or "—"
+        tipo         = row.get("Tipo", "")
+        tab_name     = row.get("_tab_name", "")
+        row_idx      = row["_row_index"]
+        codigo       = str(row.get("Código/Número", "")).strip()
+        foto_url     = str(row.get("Foto", "")).strip()
+        comp_url     = str(row.get("Comprovante", "")).strip()
 
-        # Formata o valor: se Google Sheets devolveu número (ex: 33398 em vez de 333,98)
-        # converte para formato brasileiro com 2 casas decimais
         _v = row.get("Valor (R$)", "")
         if isinstance(_v, float):
             valor = f"{_v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -563,44 +577,71 @@ def tela_pendentes():
             valor = f"{_v / 100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
         else:
             valor = str(_v).strip() if _v else "—"
-        tipo         = row.get("Tipo", "")
-        tab_name     = row.get("_tab_name", "")
-        row_idx      = row["_row_index"]
 
-        cor         = "#FFF8E1"
-        emoji_prazo = "🟡"
+        emoji_prazo = "🟢"
         try:
             venc_date = datetime.strptime(vencimento, "%d/%m/%Y").date()
             dias = (venc_date - date.today()).days
             if dias < 0:
-                cor, emoji_prazo = "#FFEBEE", "🔴"
+                emoji_prazo = "🔴"
             elif dias <= 3:
-                cor, emoji_prazo = "#FFF3E0", "🟠"
-            else:
-                cor, emoji_prazo = "#E8F5E9", "🟢"
+                emoji_prazo = "🟠"
         except Exception:
             pass
 
-        st.markdown(
-            f"""<div style="background:{cor};padding:12px 16px;border-radius:10px;margin-bottom:6px">
-            <b>{emoji_prazo} {beneficiario}</b><br>
-            <span style="font-size:0.85rem">{tipo} · R$ {valor} · Vence: {vencimento}</span><br>
-            <span style="font-size:0.78rem;color:#555">🏦 {tab_name}</span>
-            </div>""",
-            unsafe_allow_html=True,
-        )
+        tipo_emoji = {"Boleto": "🧾", "Cheque": "📝", "PIX": "💸"}.get(tipo, "📄")
+        label_exp  = f"{emoji_prazo} {beneficiario}  ·  {tipo_emoji} R$ {valor}  ·  {vencimento}"
 
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("✅ Pago", key=f"pago_{tab_name}_{row_idx}", use_container_width=True):
-                with st.spinner("Atualizando..."):
-                    update_status(SPREADSHEET_ID, tab_name, row_idx, "Pago")
-                st.rerun()
-        with col2:
-            if st.button("❌ Cancelar", key=f"cancel_{tab_name}_{row_idx}", use_container_width=True):
-                with st.spinner("Atualizando..."):
-                    update_status(SPREADSHEET_ID, tab_name, row_idx, "Cancelado")
-                st.rerun()
+        with st.expander(label_exp):
+            st.caption(f"🏦 {tab_name}")
+            st.markdown("")
+
+            # ── Código ───────────────────────────────────────────────────────
+            if codigo:
+                st.markdown("**🔢 Código para pagamento:**")
+                st.code(codigo, language=None)
+
+            # ── Foto do documento ────────────────────────────────────────────
+            if foto_url:
+                st.markdown(f"**📸 Foto:** [Ver documento]({foto_url})")
+            elif tipo != "PIX":
+                st.caption("📸 Foto não disponível (cadastrado antes dessa funcionalidade)")
+
+            st.markdown("")
+
+            # ── Comprovante ──────────────────────────────────────────────────
+            if comp_url:
+                st.markdown(f"✅ **Comprovante:** [Ver comprovante]({comp_url})")
+            else:
+                comp_file = st.file_uploader(
+                    "📎 Anexar comprovante (opcional)",
+                    type=["jpg", "jpeg", "png"],
+                    key=f"comp_{tab_name}_{row_idx}",
+                    label_visibility="visible",
+                )
+
+            st.markdown("")
+
+            # ── Botões ───────────────────────────────────────────────────────
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Pago", key=f"pago_{tab_name}_{row_idx}", use_container_width=True, type="primary"):
+                    with st.spinner("Salvando..."):
+                        # Upload do comprovante se houver arquivo
+                        if not comp_url:
+                            comp_file_val = st.session_state.get(f"comp_{tab_name}_{row_idx}")
+                            if comp_file_val is not None:
+                                nome_comp = f"comp_{re.sub(chr(32),'_',beneficiario[:20])}_{date.today().strftime('%d%m%Y')}.jpg"
+                                url_salva = upload_imagem_drive(comp_file_val.read(), nome_comp)
+                                if url_salva:
+                                    update_comprovante(SPREADSHEET_ID, tab_name, row_idx, url_salva)
+                        update_status(SPREADSHEET_ID, tab_name, row_idx, "Pago")
+                    st.rerun()
+            with col2:
+                if st.button("❌ Cancelar", key=f"cancel_{tab_name}_{row_idx}", use_container_width=True):
+                    with st.spinner("Atualizando..."):
+                        update_status(SPREADSHEET_ID, tab_name, row_idx, "Cancelado")
+                    st.rerun()
 
     st.markdown("")
     if st.button("← Voltar"):
