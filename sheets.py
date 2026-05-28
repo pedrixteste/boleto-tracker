@@ -12,6 +12,7 @@ HEADERS = [
     "Data Cadastro", "Tipo", "Beneficiário",
     "Valor (R$)", "Vencimento", "Dias p/ Vencer",
     "Status", "Código/Número", "Observações",
+    "Mês Cadastro", "Mês Vencimento",
 ]
 
 # Entidades e bancos disponíveis
@@ -70,7 +71,7 @@ def _get_or_create_sheet(spreadsheet_id: str, tab_name: str):
     except gspread.WorksheetNotFound:
         sheet = spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=10)
         sheet.append_row(HEADERS)
-        sheet.format("A1:I1", {
+        sheet.format("A1:K1", {
             "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
             "backgroundColor": {"red": 0.082, "green": 0.396, "blue": 0.753},
         })
@@ -115,7 +116,9 @@ def append_row(spreadsheet_id: str, data: dict, tab_name: str) -> bool:
         sheet = _get_or_create_sheet(spreadsheet_id, tab_name)
         today    = date.today().strftime("%d/%m/%Y")
         next_row = len(sheet.get_all_values()) + 1
-        dias_formula = f'=SE(E{next_row}="";"";VALOR(TEXTO(E{next_row};"DD/MM/AAAA"))-HOJE())'
+        dias_formula      = f'=SE(E{next_row}="";"";VALOR(TEXTO(E{next_row};"DD/MM/AAAA"))-HOJE())'
+        mes_cad_formula   = f'=SE(A{next_row}="";"";EXT.TEXTO(A{next_row};4;2)&"/"&DIREITA(A{next_row};4))'
+        mes_venc_formula  = f'=SE(E{next_row}="";"";EXT.TEXTO(E{next_row};4;2)&"/"&DIREITA(E{next_row};4))'
 
         # Prefixo "'" força Google Sheets a tratar o valor como texto,
         # evitando que "333,98" seja interpretado como 33.398 (formato americano).
@@ -132,6 +135,8 @@ def append_row(spreadsheet_id: str, data: dict, tab_name: str) -> bool:
             "Pendente",
             data.get("codigo", ""),
             data.get("observacoes", ""),
+            mes_cad_formula,
+            mes_venc_formula,
         ]
         sheet.append_row(row, value_input_option="USER_ENTERED")
         return True
