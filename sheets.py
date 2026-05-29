@@ -68,24 +68,34 @@ def _get_drive_service():
 
 
 def _get_drive_folder(service) -> str:
-    """Cria (ou reutiliza) a pasta 'Boleto Tracker' no Drive do service account."""
+    """
+    Procura a pasta 'Boleto Tracker' compartilhada com a service account.
+
+    ⚠️  Service accounts NÃO têm cota própria no Google Drive.
+    A pasta precisa ser criada pelo usuário no Google Drive pessoal e
+    compartilhada com o e-mail da service account (permissão Editor).
+    """
     global _DRIVE_FOLDER_ID
     if _DRIVE_FOLDER_ID:
         return _DRIVE_FOLDER_ID
+
     res = service.files().list(
         q="name='Boleto Tracker' and mimeType='application/vnd.google-apps.folder' and trashed=false",
         fields="files(id)",
         spaces="drive",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
     ).execute()
+
     if res.get("files"):
         _DRIVE_FOLDER_ID = res["files"][0]["id"]
-    else:
-        folder = service.files().create(
-            body={"name": "Boleto Tracker", "mimeType": "application/vnd.google-apps.folder"},
-            fields="id",
-        ).execute()
-        _DRIVE_FOLDER_ID = folder["id"]
-    return _DRIVE_FOLDER_ID
+        return _DRIVE_FOLDER_ID
+
+    # Pasta não encontrada — informa o usuário com o e-mail correto para compartilhar
+    sa_email = _get_credentials_info().get("client_email", "e-mail da service account")
+    raise RuntimeError(
+        f"SETUP_DRIVE:{sa_email}"
+    )
 
 
 def upload_imagem_drive(image_bytes: bytes, filename: str) -> str:
@@ -120,12 +130,14 @@ def upload_imagem_drive(image_bytes: bytes, filename: str) -> str:
             body={"name": safe_name, "parents": [folder_id]},
             media_body=media,
             fields="id",
+            supportsAllDrives=True,
         ).execute()
 
         # Torna público (qualquer pessoa com link pode ver)
         service.permissions().create(
             fileId=file["id"],
             body={"type": "anyone", "role": "reader"},
+            supportsAllDrives=True,
         ).execute()
 
         return f"https://drive.google.com/file/d/{file['id']}/view"

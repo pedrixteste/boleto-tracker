@@ -526,12 +526,27 @@ def tela_confirmacao():
     # Mostra erro de Drive (se o upload da foto falhou)
     if "_drive_warning" in st.session_state:
         warn = st.session_state.pop("_drive_warning")
-        st.warning(
-            f"⚠️ **A foto não foi salva** — erro no Google Drive:\n\n"
-            f"```\n{warn}\n```\n\n"
-            "Provável causa: a **Google Drive API** não está ativada no Google Cloud. "
-            "[Clique aqui para ativar](https://console.cloud.google.com/apis/library/drive.googleapis.com)"
-        )
+
+        if warn.startswith("SETUP_DRIVE:"):
+            sa_email = warn.replace("SETUP_DRIVE:", "").strip()
+            st.warning(
+                "⚠️ **Foto não salva — pasta do Drive não configurada.**\n\n"
+                "Service accounts do Google não têm armazenamento próprio. "
+                "Você precisa criar uma pasta no **seu** Google Drive e compartilhá-la.\n\n"
+                "**3 passos (só uma vez):**\n\n"
+                "1. Acesse [drive.google.com](https://drive.google.com) → clique em **Novo → Pasta** → "
+                "nomeie **`Boleto Tracker`**\n\n"
+                f"2. Clique com botão direito na pasta → **Compartilhar** → adicione este e-mail "
+                f"com permissão **Editor**:\n\n`{sa_email}`\n\n"
+                "3. Pronto! Tente registrar um boleto com foto novamente."
+            )
+        else:
+            st.warning(
+                f"⚠️ **A foto não foi salva** — erro no Google Drive:\n\n"
+                f"```\n{warn}\n```\n\n"
+                "Verifique se a **Google Drive API** está ativada: "
+                "[Clique aqui](https://console.cloud.google.com/apis/library/drive.googleapis.com)"
+            )
     else:
         st.balloons()
 
