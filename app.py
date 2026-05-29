@@ -527,25 +527,21 @@ def tela_confirmacao():
     if "_drive_warning" in st.session_state:
         warn = st.session_state.pop("_drive_warning")
 
-        if warn.startswith("SETUP_DRIVE:"):
-            sa_email = warn.replace("SETUP_DRIVE:", "").strip()
+        if "SETUP_IMGBB" in warn:
             st.warning(
-                "⚠️ **Foto não salva — pasta do Drive não configurada.**\n\n"
-                "Service accounts do Google não têm armazenamento próprio. "
-                "Você precisa criar uma pasta no **seu** Google Drive e compartilhá-la.\n\n"
+                "⚠️ **Foto não salva — ImgBB não configurado.**\n\n"
+                "Para salvar fotos dos boletos, configure o ImgBB (gratuito, sem cartão):\n\n"
                 "**3 passos (só uma vez):**\n\n"
-                "1. Acesse [drive.google.com](https://drive.google.com) → clique em **Novo → Pasta** → "
-                "nomeie **`Boleto Tracker`**\n\n"
-                f"2. Clique com botão direito na pasta → **Compartilhar** → adicione este e-mail "
-                f"com permissão **Editor**:\n\n`{sa_email}`\n\n"
-                "3. Pronto! Tente registrar um boleto com foto novamente."
+                "1. Acesse [imgbb.com](https://imgbb.com) → crie uma conta gratuita\n\n"
+                "2. Vá em **About → API** (ou acesse [api.imgbb.com](https://api.imgbb.com)) "
+                "→ copie sua API key\n\n"
+                "3. No Streamlit Cloud → seu app → **Settings → Secrets** → adicione:\n"
+                "```\nimgbb_api_key = \"cole-sua-chave-aqui\"\n```\n\n"
+                "Depois disso as fotos serão salvas automaticamente."
             )
         else:
             st.warning(
-                f"⚠️ **A foto não foi salva** — erro no Google Drive:\n\n"
-                f"```\n{warn}\n```\n\n"
-                "Verifique se a **Google Drive API** está ativada: "
-                "[Clique aqui](https://console.cloud.google.com/apis/library/drive.googleapis.com)"
+                f"⚠️ **A foto não foi salva:**\n\n```\n{warn}\n```"
             )
     else:
         st.balloons()

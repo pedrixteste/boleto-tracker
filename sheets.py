@@ -4,6 +4,8 @@ import streamlit as st
 import json
 import io
 import re
+import base64
+import requests as _requests
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -55,97 +57,51 @@ def _get_client():
     return gspread.service_account_from_dict(_get_credentials_info(), scopes=SCOPES)
 
 
-# ── Google Drive ──────────────────────────────────────────────────────────────
-
-_DRIVE_FOLDER_ID: str | None = None
-
-
-def _get_drive_service():
-    from google.oauth2.service_account import Credentials
-    from googleapiclient.discovery import build
-    creds = Credentials.from_service_account_info(_get_credentials_info(), scopes=SCOPES)
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
-
-
-def _get_drive_folder(service) -> str:
-    """
-    Procura a pasta 'Boleto Tracker' compartilhada com a service account.
-
-    ⚠️  Service accounts NÃO têm cota própria no Google Drive.
-    A pasta precisa ser criada pelo usuário no Google Drive pessoal e
-    compartilhada com o e-mail da service account (permissão Editor).
-    """
-    global _DRIVE_FOLDER_ID
-    if _DRIVE_FOLDER_ID:
-        return _DRIVE_FOLDER_ID
-
-    res = service.files().list(
-        q="name='Boleto Tracker' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-        fields="files(id)",
-        spaces="drive",
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True,
-    ).execute()
-
-    if res.get("files"):
-        _DRIVE_FOLDER_ID = res["files"][0]["id"]
-        return _DRIVE_FOLDER_ID
-
-    # Pasta não encontrada — informa o usuário com o e-mail correto para compartilhar
-    sa_email = _get_credentials_info().get("client_email", "e-mail da service account")
-    raise RuntimeError(
-        f"SETUP_DRIVE:{sa_email}"
-    )
-
+# ── Hospedagem de imagens (ImgBB) ─────────────────────────────────────────────
 
 def upload_imagem_drive(image_bytes: bytes, filename: str) -> str:
     """
-    Faz upload da imagem para o Google Drive (pasta 'Boleto Tracker'),
-    torna pública e retorna o link de visualização.
+    Faz upload da imagem para o ImgBB (hosting gratuito) e retorna URL pública.
     Comprime para JPEG 1200px / qualidade 75 antes de enviar.
+
+    Requer a chave de API do ImgBB em st.secrets["imgbb_api_key"].
+    Cadastro gratuito em: https://imgbb.com/
     """
+    from PIL import Image as _PILImage
+
+    # Chave de API
     try:
-        from PIL import Image as _PILImage
-        from googleapiclient.http import MediaIoBaseUpload
+        api_key = st.secrets["imgbb_api_key"]
+    except Exception:
+        raise RuntimeError(
+            "SETUP_IMGBB: Chave do ImgBB não configurada. "
+            "Crie uma conta gratuita em imgbb.com, copie sua API key e adicione "
+            "imgbb_api_key = \"sua-chave\" nos Secrets do Streamlit Cloud."
+        )
 
-        # Comprime imagem
-        img = _PILImage.open(io.BytesIO(image_bytes))
-        if img.width > 1200:
-            ratio = 1200 / img.width
-            img = img.resize((1200, int(img.height * ratio)), _PILImage.LANCZOS)
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=75)
-        compressed = buf.getvalue()
+    # Comprime imagem
+    img = _PILImage.open(io.BytesIO(image_bytes))
+    if img.width > 1200:
+        ratio = 1200 / img.width
+        img = img.resize((1200, int(img.height * ratio)), _PILImage.LANCZOS)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=75)
+    compressed = buf.getvalue()
 
-        # Sanitiza nome do arquivo
-        safe_name = re.sub(r"[^\w\-.]", "_", filename)
-
-        service   = _get_drive_service()
-        folder_id = _get_drive_folder(service)
-
-        media = MediaIoBaseUpload(io.BytesIO(compressed), mimetype="image/jpeg", resumable=False)
-        file  = service.files().create(
-            body={"name": safe_name, "parents": [folder_id]},
-            media_body=media,
-            fields="id",
-            supportsAllDrives=True,
-        ).execute()
-
-        # Torna público (qualquer pessoa com link pode ver)
-        service.permissions().create(
-            fileId=file["id"],
-            body={"type": "anyone", "role": "reader"},
-            supportsAllDrives=True,
-        ).execute()
-
-        return f"https://drive.google.com/file/d/{file['id']}/view"
-
-    except Exception as e:
-        print(f"[upload_imagem_drive] Erro: {e}")
-        # Propaga o erro para que o chamador possa mostrar aviso na tela
-        raise RuntimeError(f"Drive: {e}") from e
+    # Upload via API
+    b64 = base64.b64encode(compressed).decode("utf-8")
+    safe_name = re.sub(r"[^\w\-.]", "_", filename)
+    resp = _requests.post(
+        "https://api.imgbb.com/1/upload",
+        data={"key": api_key, "image": b64, "name": safe_name},
+        timeout=30,
+    )
+    data = resp.json()
+    if data.get("success"):
+        return data["data"]["url"]
+    raise RuntimeError(f"ImgBB: {data.get('error', {}).get('message', resp.text[:200])}")
 
 
 def _aplicar_filtro(spreadsheet, sheet):
